@@ -1,6 +1,47 @@
 [package]
 name = "rusty_potato"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["RustyPotato Team"]
+description = "A high-performance Redis-compatible key-value store"
+license = "MIT OR Apache-2.0"
+keywords = ["database", "redis", "key-value", "storage"]
+categories = ["database-implementations"]
 
 [dependencies]
+# Async runtime for high-performance concurrent I/O operations
+tokio = { version = "1.0", features = ["full"] }
+
+# CLI argument parsing with excellent ergonomics and help generation
+clap = { version = "4.0", features = ["derive"] }
+
+# Lock-free concurrent HashMap for the primary data store
+dashmap = "5.0"
+
+# Structured logging and instrumentation
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Ergonomic error handling
+thiserror = "1.0"
+
+# Efficient byte buffer management for network operations
+bytes = "1.0"
+
+# Additional core dependencies
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.0", features = ["v4"] }
+async-trait = "0.1"
+
+[[bin]]
+name = "rustypotato-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "rustypotato-cli"
+path = "src/bin/cli.rs"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.0"
