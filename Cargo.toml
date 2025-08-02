@@ -1,5 +1,5 @@
 [package]
-name = "rusty_potato"
+name = "rustypotato"
 version = "0.1.0"
 edition = "2021"
 authors = ["RustyPotato Team"]
@@ -33,6 +33,11 @@ serde = { version = "1.0", features = ["derive"] }
 uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 
+# Configuration management
+toml = "0.8"
+config = "0.14"
+dirs = "5.0"
+
 [[bin]]
 name = "rustypotato-server"
 path = "src/bin/server.rs"
@@ -45,3 +50,4 @@ path = "src/bin/cli.rs"
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1.0"
+tempfile = "3.0"

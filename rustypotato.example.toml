@@ -1,0 +1,57 @@
+# RustyPotato Configuration File
+# 
+# This is an example configuration file for RustyPotato.
+# Copy this file to rustypotato.toml and modify as needed.
+
+[server]
+# Port to bind the server to (default: 6379)
+port = 6379
+
+# IP address to bind to (default: "127.0.0.1")
+# Use "0.0.0.0" to bind to all interfaces
+bind_address = "127.0.0.1"
+
+# Maximum number of concurrent connections (default: 10000)
+max_connections = 10000
+
+# Number of worker threads (default: auto-detect)
+# worker_threads = 4
+
+[storage]
+# Enable append-only file (AOF) persistence (default: true)
+aof_enabled = true
+
+# Path to the AOF file (default: "rustypotato.aof")
+aof_path = "rustypotato.aof"
+
+# AOF fsync policy: "Always", "EverySecond", or "Never" (default: "EverySecond")
+aof_fsync_policy = "EverySecond"
+
+# Memory limit in bytes (default: unlimited)
+# memory_limit = 1073741824  # 1GB
+
+[network]
+# Enable TCP_NODELAY (default: true)
+tcp_nodelay = true
+
+# Enable TCP keepalive (default: true)
+tcp_keepalive = true
+
+# Connection timeout in seconds (default: 30)
+connection_timeout = 30
+
+# Read timeout in seconds (default: 30)
+read_timeout = 30
+
+# Write timeout in seconds (default: 30)
+write_timeout = 30
+
+[logging]
+# Log level: "trace", "debug", "info", "warn", or "error" (default: "info")
+level = "info"
+
+# Log format: "Json", "Pretty", or "Compact" (default: "Pretty")
+format = "Pretty"
+
+# Optional log file path (default: stdout only)
+# file_path = "/var/log/rustypotato.log"

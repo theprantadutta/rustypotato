@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::{CommandRegistry, SetCommand, GetCommand, DelCommand, ExistsCommand, ParsedCommand};
+    use crate::commands::{CommandRegistry, SetCommand, GetCommand, DelCommand, ExistsCommand, IncrCommand, DecrCommand, ParsedCommand};
     use crate::storage::MemoryStore;
     use uuid::Uuid;
 
@@ -139,5 +139,68 @@ mod tests {
         let get_missing_cmd = ParsedCommand::parse("GET nonexistent", client_id).unwrap();
         let result = registry.execute(&get_missing_cmd, &store).await;
         assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(None))));
+    }
+    
+    #[tokio::test]
+    async fn test_atomic_operations_integration() {
+        let mut registry = CommandRegistry::new();
+        registry.register(Box::new(SetCommand));
+        registry.register(Box::new(GetCommand));
+        registry.register(Box::new(IncrCommand));
+        registry.register(Box::new(DecrCommand));
+        
+        let store = MemoryStore::new();
+        let client_id = Uuid::new_v4();
+        
+        // Test INCR on new key
+        let incr_cmd = ParsedCommand::parse("INCR counter", client_id).unwrap();
+        let result = registry.execute(&incr_cmd, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))));
+        
+        // Test INCR on existing key
+        let incr_cmd2 = ParsedCommand::parse("INCR counter", client_id).unwrap();
+        let result = registry.execute(&incr_cmd2, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(2))));
+        
+        // Test DECR on existing key
+        let decr_cmd = ParsedCommand::parse("DECR counter", client_id).unwrap();
+        let result = registry.execute(&decr_cmd, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))));
+        
+        // Test DECR on new key
+        let decr_cmd2 = ParsedCommand::parse("DECR newcounter", client_id).unwrap();
+        let result = registry.execute(&decr_cmd2, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(-1))));
+        
+        // Test INCR on string number
+        let set_cmd = ParsedCommand::parse("SET strcounter 42", client_id).unwrap();
+        let result = registry.execute(&set_cmd, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
+        
+        let incr_str_cmd = ParsedCommand::parse("INCR strcounter", client_id).unwrap();
+        let result = registry.execute(&incr_str_cmd, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(43))));
+        
+        // Test INCR on non-numeric string (should error)
+        let set_invalid_cmd = ParsedCommand::parse("SET invalid not_a_number", client_id).unwrap();
+        let result = registry.execute(&set_invalid_cmd, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
+        
+        let incr_invalid_cmd = ParsedCommand::parse("INCR invalid", client_id).unwrap();
+        let result = registry.execute(&incr_invalid_cmd, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("value is not an integer")));
+        
+        // Verify final values with GET
+        let get_counter = ParsedCommand::parse("GET counter", client_id).unwrap();
+        let result = registry.execute(&get_counter, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "1"));
+        
+        let get_newcounter = ParsedCommand::parse("GET newcounter", client_id).unwrap();
+        let result = registry.execute(&get_newcounter, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "-1"));
+        
+        let get_strcounter = ParsedCommand::parse("GET strcounter", client_id).unwrap();
+        let result = registry.execute(&get_strcounter, &store).await;
+        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "43"));
     }
 }

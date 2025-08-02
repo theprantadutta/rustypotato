@@ -18,7 +18,7 @@ impl Command for SetCommand {
         let key = &args[0];
         let value = &args[1];
         
-        match store.set(key, value.as_str()) {
+        match store.set(key, value.as_str()).await {
             Ok(()) => CommandResult::Ok(ResponseValue::SimpleString("OK".to_string())),
             Err(e) => CommandResult::Error(e.to_client_error()),
         }
@@ -78,7 +78,7 @@ impl Command for DelCommand {
         let mut deleted_count = 0i64;
         
         for key in args {
-            match store.delete(key) {
+            match store.delete(key).await {
                 Ok(true) => deleted_count += 1,
                 Ok(false) => {}, // Key didn't exist, continue
                 Err(e) => return CommandResult::Error(e.to_client_error()),
@@ -245,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_command_existing_key() {
         let store = create_test_store();
-        store.set("test_key", "test_value").unwrap();
+        store.set("test_key", "test_value").await.unwrap();
         
         let cmd = GetCommand;
         let args = vec!["test_key".to_string()];
@@ -279,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_command_integer_value() {
         let store = create_test_store();
-        store.set("int_key", 42i64).unwrap();
+        store.set("int_key", 42i64).await.unwrap();
         
         let cmd = GetCommand;
         let args = vec!["int_key".to_string()];
@@ -329,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_command_empty_key() {
         let store = create_test_store();
-        store.set("", "empty_key_value").unwrap();
+        store.set("", "empty_key_value").await.unwrap();
         
         let cmd = GetCommand;
         let args = vec!["".to_string()];
@@ -355,7 +355,7 @@ mod tests {
     #[tokio::test]
     async fn test_del_command_single_existing_key() {
         let store = create_test_store();
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         
         let cmd = DelCommand;
         let args = vec!["key1".to_string()];
@@ -392,9 +392,9 @@ mod tests {
     #[tokio::test]
     async fn test_del_command_multiple_keys() {
         let store = create_test_store();
-        store.set("key1", "value1").unwrap();
-        store.set("key2", "value2").unwrap();
-        store.set("key3", "value3").unwrap();
+        store.set("key1", "value1").await.unwrap();
+        store.set("key2", "value2").await.unwrap();
+        store.set("key3", "value3").await.unwrap();
         
         let cmd = DelCommand;
         let args = vec!["key1".to_string(), "key2".to_string(), "nonexistent".to_string(), "key3".to_string()];
@@ -417,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn test_del_command_duplicate_keys() {
         let store = create_test_store();
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         
         let cmd = DelCommand;
         let args = vec!["key1".to_string(), "key1".to_string()];
@@ -459,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn test_exists_command_single_existing_key() {
         let store = create_test_store();
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         
         let cmd = ExistsCommand;
         let args = vec!["key1".to_string()];
@@ -493,8 +493,8 @@ mod tests {
     #[tokio::test]
     async fn test_exists_command_multiple_keys() {
         let store = create_test_store();
-        store.set("key1", "value1").unwrap();
-        store.set("key3", "value3").unwrap();
+        store.set("key1", "value1").await.unwrap();
+        store.set("key3", "value3").await.unwrap();
         
         let cmd = ExistsCommand;
         let args = vec!["key1".to_string(), "key2".to_string(), "key3".to_string()];
@@ -512,7 +512,7 @@ mod tests {
     #[tokio::test]
     async fn test_exists_command_duplicate_keys() {
         let store = create_test_store();
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         
         let cmd = ExistsCommand;
         let args = vec!["key1".to_string(), "key1".to_string()];
@@ -557,10 +557,10 @@ mod tests {
         
         // Set a key with very short TTL
         let expires_at = std::time::Instant::now() + std::time::Duration::from_millis(1);
-        store.set_with_expiration("expired_key", "value", expires_at).unwrap();
+        store.set_with_expiration("expired_key", "value", expires_at).await.unwrap();
         
         // Wait for expiration
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         
         let cmd = GetCommand;
         let args = vec!["expired_key".to_string()];
@@ -581,10 +581,10 @@ mod tests {
         
         // Set a key with very short TTL
         let expires_at = std::time::Instant::now() + std::time::Duration::from_millis(1);
-        store.set_with_expiration("expired_key", "value", expires_at).unwrap();
+        store.set_with_expiration("expired_key", "value", expires_at).await.unwrap();
         
         // Wait for expiration
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         
         let cmd = ExistsCommand;
         let args = vec!["expired_key".to_string()];
@@ -605,10 +605,10 @@ mod tests {
         
         // Set a key with very short TTL
         let expires_at = std::time::Instant::now() + std::time::Duration::from_millis(1);
-        store.set_with_expiration("expired_key", "value", expires_at).unwrap();
+        store.set_with_expiration("expired_key", "value", expires_at).await.unwrap();
         
         // Wait for expiration
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         
         let cmd = DelCommand;
         let args = vec!["expired_key".to_string()];

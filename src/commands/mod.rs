@@ -14,6 +14,8 @@ mod integration_tests;
 
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use string::{SetCommand, GetCommand, DelCommand, ExistsCommand};
+pub use ttl::{ExpireCommand, TtlCommand};
+pub use atomic::{IncrCommand, DecrCommand};
 
 /// Command execution result types
 #[derive(Debug, Clone, PartialEq)]

@@ -159,7 +159,7 @@ impl ExpirationManager {
                                     if let Some(stored_expires_at) = stored_value.expires_at {
                                         if stored_expires_at == entry.expires_at {
                                             // Key still has the same expiration time, so delete it
-                                            if let Err(e) = store.delete(&entry.key) {
+                                            if let Err(e) = store.delete(&entry.key).await {
                                                 error!("Failed to delete expired key '{}': {}", entry.key, e);
                                             } else {
                                                 trace!("Deleted expired key '{}'", entry.key);
@@ -282,7 +282,7 @@ mod tests {
         
         // Set a key with expiration that matches what we tell the manager
         let expires_at = Instant::now() + Duration::from_millis(100);
-        store.set_with_expiration("short_lived", "value", expires_at).unwrap();
+        store.set_with_expiration("short_lived", "value", expires_at).await.unwrap();
         assert!(store.exists("short_lived").unwrap());
         
         // Add expiration to manager with the same expiration time
@@ -306,12 +306,12 @@ mod tests {
         
         // Set a key with TTL
         let expires_at = Instant::now() + Duration::from_millis(100);
-        store.set_with_expiration("test_key", "value1", expires_at).unwrap();
+        store.set_with_expiration("test_key", "value1", expires_at).await.unwrap();
         manager.add_expiration("test_key".to_string(), expires_at).unwrap();
         
         // Update the key with a different expiration
         let new_expires_at = Instant::now() + Duration::from_secs(60);
-        store.set_with_expiration("test_key", "value2", new_expires_at).unwrap();
+        store.set_with_expiration("test_key", "value2", new_expires_at).await.unwrap();
         
         // Wait for the original expiration time to pass
         sleep(Duration::from_millis(150)).await;
@@ -319,7 +319,7 @@ mod tests {
         // Key should still exist because it was updated with a new expiration
         assert!(store.exists("test_key").unwrap());
         let stored = store.get("test_key").unwrap().unwrap();
-        assert_eq!(stored.as_string(), "value2");
+        assert_eq!(stored.value.to_string(), "value2");
         
         manager.shutdown().await.unwrap();
     }
@@ -332,11 +332,11 @@ mod tests {
         
         // Set a key with TTL
         let expires_at = Instant::now() + Duration::from_millis(200);
-        store.set_with_expiration("test_key", "value", expires_at).unwrap();
+        store.set_with_expiration("test_key", "value", expires_at).await.unwrap();
         manager.add_expiration("test_key".to_string(), expires_at).unwrap();
         
         // Delete the key manually
-        store.delete("test_key").unwrap();
+        store.delete("test_key").await.unwrap();
         
         // Wait for cleanup cycle
         sleep(Duration::from_millis(100)).await;
@@ -359,7 +359,7 @@ mod tests {
         for i in 0..5 {
             let key = format!("key{}", i);
             let expires_at = now + Duration::from_millis(100 + i * 50);
-            store.set_with_expiration(&key, format!("value{}", i), expires_at).unwrap();
+            store.set_with_expiration(&key, format!("value{}", i), expires_at).await.unwrap();
             manager.add_expiration(key, expires_at).unwrap();
         }
         
@@ -415,7 +415,7 @@ mod tests {
         
         // Set a key with TTL
         let expires_at = Instant::now() + Duration::from_millis(100);
-        store.set_with_expiration("test_key", "value", expires_at).unwrap();
+        store.set_with_expiration("test_key", "value", expires_at).await.unwrap();
         manager.add_expiration("test_key".to_string(), expires_at).unwrap();
         
         // Persist the key (remove expiration)
@@ -442,7 +442,7 @@ mod tests {
         for i in 0..100 {
             let key = format!("key{}", i);
             let expires_at = now + Duration::from_millis(50 + (i % 10) * 10);
-            store.set_with_expiration(&key, format!("value{}", i), expires_at).unwrap();
+            store.set_with_expiration(&key, format!("value{}", i), expires_at).await.unwrap();
             manager.add_expiration(key, expires_at).unwrap();
         }
         
@@ -465,7 +465,7 @@ mod tests {
         
         // Set a key with short expiration
         let expires_at = Instant::now() + Duration::from_millis(100);
-        store.set_with_expiration("test_key", "value", expires_at).unwrap();
+        store.set_with_expiration("test_key", "value", expires_at).await.unwrap();
         manager.add_expiration("test_key".to_string(), expires_at).unwrap();
         
         // Key should exist initially
@@ -492,12 +492,12 @@ mod tests {
         assert_eq!(store.ttl("nonexistent").unwrap(), -2);
         
         // Test TTL for key without expiration
-        store.set("persistent_key", "value").unwrap();
+        store.set("persistent_key", "value").await.unwrap();
         assert_eq!(store.ttl("persistent_key").unwrap(), -1);
         
         // Test TTL for key with expiration
         let expires_at = Instant::now() + Duration::from_secs(60);
-        store.set_with_expiration("expiring_key", "value", expires_at).unwrap();
+        store.set_with_expiration("expiring_key", "value", expires_at).await.unwrap();
         manager.add_expiration("expiring_key".to_string(), expires_at).unwrap();
         
         let ttl = store.ttl("expiring_key").unwrap();
@@ -505,7 +505,7 @@ mod tests {
         
         // Test TTL for expired key
         let expired_at = Instant::now() - Duration::from_secs(1);
-        store.set_with_expiration("expired_key", "value", expired_at).unwrap();
+        store.set_with_expiration("expired_key", "value", expired_at).await.unwrap();
         assert_eq!(store.ttl("expired_key").unwrap(), -2); // Should be cleaned up
         
         manager.shutdown().await.unwrap();
@@ -518,18 +518,18 @@ mod tests {
         let mut manager = ExpirationManager::new(store.clone(), cleanup_interval);
         
         // Set a key without expiration
-        store.set("test_key", "value").unwrap();
+        store.set("test_key", "value").await.unwrap();
         assert_eq!(store.ttl("test_key").unwrap(), -1);
         
         // Set expiration using expire method
-        assert!(store.expire("test_key", 1).unwrap()); // 1 second TTL
+        assert!(store.expire("test_key", 1).await.unwrap()); // 1 second TTL
         
         let ttl = store.ttl("test_key").unwrap();
         // TTL should be close to 1 second, but allow for some timing variance
         assert!(ttl >= 0 && ttl <= 1, "Expected TTL between 0 and 1, got {}", ttl);
         
         // Try to expire non-existent key
-        assert!(!store.expire("nonexistent", 60).unwrap());
+        assert!(!store.expire("nonexistent", 60).await.unwrap());
         
         manager.shutdown().await.unwrap();
     }

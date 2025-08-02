@@ -3,7 +3,9 @@
 use dashmap::DashMap;
 use std::time::Instant;
 use std::fmt;
+use std::sync::Arc;
 use crate::error::{RustyPotatoError, Result};
+use crate::storage::persistence::{PersistenceManager, AofEntry, AofCommand};
 
 /// Value types supported by RustyPotato
 #[derive(Debug, Clone, PartialEq)]
@@ -94,6 +96,7 @@ pub struct StoredValue {
 pub struct MemoryStore {
     data: DashMap<String, StoredValue>,
     expiration_index: DashMap<String, Instant>,
+    persistence: Option<Arc<PersistenceManager>>,
 }
 
 impl MemoryStore {
@@ -102,6 +105,85 @@ impl MemoryStore {
         Self {
             data: DashMap::new(),
             expiration_index: DashMap::new(),
+            persistence: None,
+        }
+    }
+    
+    /// Create a new memory store with persistence
+    pub fn with_persistence(persistence: Arc<PersistenceManager>) -> Self {
+        Self {
+            data: DashMap::new(),
+            expiration_index: DashMap::new(),
+            persistence: Some(persistence),
+        }
+    }
+    
+    /// Recover data from persistence layer
+    pub async fn recover_from_persistence(&self) -> Result<usize> {
+        if let Some(ref persistence) = self.persistence {
+            let entries = persistence.recover().await?;
+            let mut recovered_count = 0;
+            
+            for entry in entries {
+                match entry.command {
+                    AofCommand::Set { key, value } => {
+                        let stored_value = StoredValue::new(value);
+                        self.data.insert(key, stored_value);
+                        recovered_count += 1;
+                    }
+                    AofCommand::SetWithExpiration { key, value, expires_at } => {
+                        let expires_instant = self.timestamp_to_instant(expires_at);
+                        if expires_instant > Instant::now() {
+                            let stored_value = StoredValue::new_with_expiration(value, expires_instant);
+                            self.expiration_index.insert(key.clone(), expires_instant);
+                            self.data.insert(key, stored_value);
+                            recovered_count += 1;
+                        }
+                        // Skip expired keys during recovery
+                    }
+                    AofCommand::Delete { key } => {
+                        self.data.remove(&key);
+                        self.expiration_index.remove(&key);
+                    }
+                    AofCommand::Expire { key, expires_at } => {
+                        let expires_instant = self.timestamp_to_instant(expires_at);
+                        if let Some(mut entry) = self.data.get_mut(&key) {
+                            if expires_instant > Instant::now() {
+                                entry.set_expiration(expires_instant);
+                                self.expiration_index.insert(key, expires_instant);
+                            } else {
+                                // Key should be expired, remove it
+                                drop(entry);
+                                self.data.remove(&key);
+                                self.expiration_index.remove(&key);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            tracing::info!("Recovered {} keys from persistence", recovered_count);
+            Ok(recovered_count)
+        } else {
+            Ok(0)
+        }
+    }
+    
+    /// Convert timestamp to Instant (helper method)
+    fn timestamp_to_instant(&self, timestamp: u64) -> Instant {
+        use std::time::{SystemTime, UNIX_EPOCH, Duration};
+        
+        let now = Instant::now();
+        let system_now = SystemTime::now();
+        let target_system_time = UNIX_EPOCH + Duration::from_secs(timestamp);
+        
+        if target_system_time > system_now {
+            // Future time
+            let duration_from_now = target_system_time.duration_since(system_now).unwrap_or_default();
+            now + duration_from_now
+        } else {
+            // Past time (treat as expired)
+            now - Duration::from_secs(1)
         }
     }
     
@@ -116,56 +198,74 @@ impl MemoryStore {
     }
     
     /// Set a key-value pair in the store
-    pub fn set<K, V>(&self, key: K, value: V) -> Result<()>
+    pub async fn set<K, V>(&self, key: K, value: V) -> Result<()>
     where
         K: Into<String>,
         V: Into<ValueType>,
     {
         let key_string = key.into();
-        let stored_value = StoredValue::new(value.into());
+        let value_type = value.into();
+        let stored_value = StoredValue::new(value_type.clone());
         
         // Remove from expiration index if it exists
         self.expiration_index.remove(&key_string);
         
         // Insert the new value
-        self.data.insert(key_string, stored_value);
+        self.data.insert(key_string.clone(), stored_value);
+        
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            persistence.log_set(key_string, value_type).await?;
+        }
         
         Ok(())
     }
     
     /// Set a key-value pair with TTL in seconds
-    pub fn set_with_ttl<K, V>(&self, key: K, value: V, ttl_seconds: u64) -> Result<()>
+    pub async fn set_with_ttl<K, V>(&self, key: K, value: V, ttl_seconds: u64) -> Result<()>
     where
         K: Into<String>,
         V: Into<ValueType>,
     {
         let key_string = key.into();
-        let stored_value = StoredValue::new_with_ttl(value.into(), ttl_seconds);
+        let value_type = value.into();
+        let stored_value = StoredValue::new_with_ttl(value_type.clone(), ttl_seconds);
         let expires_at = stored_value.expires_at.unwrap();
         
         // Update expiration index
         self.expiration_index.insert(key_string.clone(), expires_at);
         
         // Insert the new value
-        self.data.insert(key_string, stored_value);
+        self.data.insert(key_string.clone(), stored_value);
+        
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            persistence.log_set_with_expiration(key_string, value_type, expires_at).await?;
+        }
         
         Ok(())
     }
     
     /// Set a key-value pair with specific expiration time
-    pub fn set_with_expiration<K, V>(&self, key: K, value: V, expires_at: Instant) -> Result<()>
+    pub async fn set_with_expiration<K, V>(&self, key: K, value: V, expires_at: Instant) -> Result<()>
     where
         K: Into<String>,
         V: Into<ValueType>,
     {
         let key_string = key.into();
-        let stored_value = StoredValue::new_with_expiration(value.into(), expires_at);
+        let value_type = value.into();
+        let stored_value = StoredValue::new_with_expiration(value_type.clone(), expires_at);
         
         // Update expiration index
         self.expiration_index.insert(key_string.clone(), expires_at);
         
         // Insert the new value
-        self.data.insert(key_string, stored_value);
+        self.data.insert(key_string.clone(), stored_value);
+        
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            persistence.log_set_with_expiration(key_string, value_type, expires_at).await?;
+        }
         
         Ok(())
     }
@@ -182,7 +282,7 @@ impl MemoryStore {
             if entry.is_expired() {
                 // Remove expired key
                 drop(entry); // Release the lock before removing
-                self.delete(key_str)?;
+                self.delete_sync(key_str)?;
                 return Ok(None);
             }
             
@@ -195,7 +295,7 @@ impl MemoryStore {
     }
     
     /// Delete a key from the store
-    pub fn delete<K>(&self, key: K) -> Result<bool>
+    pub async fn delete<K>(&self, key: K) -> Result<bool>
     where
         K: AsRef<str>,
     {
@@ -216,7 +316,43 @@ impl MemoryStore {
         self.expiration_index.remove(key_str);
         
         // Remove from main data store
-        Ok(self.data.remove(key_str).is_some())
+        let was_removed = self.data.remove(key_str).is_some();
+        
+        // Log to persistence if key was actually removed
+        if was_removed {
+            if let Some(ref persistence) = self.persistence {
+                persistence.log_delete(key_str.to_string()).await?;
+            }
+        }
+        
+        Ok(was_removed)
+    }
+    
+    /// Internal synchronous delete method for use in sync contexts
+    fn delete_sync<K>(&self, key: K) -> Result<bool>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        
+        // Check if key exists and is not expired first
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                // Remove expired key automatically and return false (key didn't exist)
+                drop(entry); // Release the lock before removing
+                self.expiration_index.remove(key_str);
+                self.data.remove(key_str);
+                return Ok(false);
+            }
+        }
+        
+        // Remove from expiration index
+        self.expiration_index.remove(key_str);
+        
+        // Remove from main data store
+        let was_removed = self.data.remove(key_str).is_some();
+        
+        Ok(was_removed)
     }
     
     /// Check if a key exists in the store
@@ -230,7 +366,7 @@ impl MemoryStore {
             if entry.is_expired() {
                 // Remove expired key
                 drop(entry); // Release the lock before removing
-                self.delete(key_str)?;
+                self.delete_sync(key_str)?;
                 return Ok(false);
             }
             Ok(true)
@@ -240,7 +376,7 @@ impl MemoryStore {
     }
     
     /// Set expiration for an existing key
-    pub fn expire<K>(&self, key: K, ttl_seconds: u64) -> Result<bool>
+    pub async fn expire<K>(&self, key: K, ttl_seconds: u64) -> Result<bool>
     where
         K: AsRef<str>,
     {
@@ -250,7 +386,7 @@ impl MemoryStore {
             if entry.is_expired() {
                 // Remove expired key
                 drop(entry); // Release the lock before removing
-                self.delete(key_str)?;
+                self.delete(key_str).await?;
                 return Ok(false);
             }
             
@@ -259,6 +395,11 @@ impl MemoryStore {
             
             // Update expiration index
             self.expiration_index.insert(key_str.to_string(), expires_at);
+            
+            // Log to persistence
+            if let Some(ref persistence) = self.persistence {
+                persistence.log_expire(key_str.to_string(), expires_at).await?;
+            }
             
             Ok(true)
         } else {
@@ -277,7 +418,7 @@ impl MemoryStore {
             if entry.is_expired() {
                 // Remove expired key
                 drop(entry); // Release the lock before removing
-                self.delete(key_str)?;
+                self.delete_sync(key_str)?;
                 return Ok(-2); // Key doesn't exist
             }
             
@@ -298,7 +439,7 @@ impl MemoryStore {
             if entry.is_expired() {
                 // Remove expired key
                 drop(entry); // Release the lock before removing
-                self.delete(key_str)?;
+                self.delete_sync(key_str)?;
                 return Ok(false);
             }
             
@@ -325,6 +466,81 @@ impl MemoryStore {
         self.expiration_index.clear();
     }
     
+    /// Atomically increment a key's integer value by 1
+    /// If key doesn't exist, initialize it to 1
+    /// Returns the new value after increment
+    pub async fn incr<K>(&self, key: K) -> Result<i64>
+    where
+        K: Into<String>,
+    {
+        self.incr_by(key, 1).await
+    }
+    
+    /// Atomically decrement a key's integer value by 1
+    /// If key doesn't exist, initialize it to -1
+    /// Returns the new value after decrement
+    pub async fn decr<K>(&self, key: K) -> Result<i64>
+    where
+        K: Into<String>,
+    {
+        self.incr_by(key, -1).await
+    }
+    
+    /// Atomically increment a key's integer value by the specified amount
+    /// If key doesn't exist, initialize it to the increment value
+    /// Returns the new value after increment
+    pub async fn incr_by<K>(&self, key: K, increment: i64) -> Result<i64>
+    where
+        K: Into<String>,
+    {
+        let key_string = key.into();
+        
+        // Use entry API for atomic operation
+        let result = match self.data.entry(key_string.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                // Check if expired first
+                if entry.get().is_expired() {
+                    // Remove expired key and treat as new
+                    entry.remove();
+                    self.expiration_index.remove(&key_string);
+                    
+                    // Insert new value with increment
+                    let new_value = increment;
+                    let stored_value = StoredValue::new(ValueType::Integer(new_value));
+                    self.data.insert(key_string.clone(), stored_value);
+                    new_value
+                } else {
+                    // Try to convert existing value to integer and increment
+                    let current_value = entry.get().value.to_integer()?;
+                    let new_value = current_value.checked_add(increment)
+                        .ok_or(RustyPotatoError::NotAnInteger)?;
+                    
+                    // Update the value in place
+                    let mut stored_value = entry.get().clone();
+                    stored_value.value = ValueType::Integer(new_value);
+                    stored_value.touch();
+                    entry.insert(stored_value);
+                    
+                    new_value
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                // Key doesn't exist, initialize with increment value
+                let new_value = increment;
+                let stored_value = StoredValue::new(ValueType::Integer(new_value));
+                entry.insert(stored_value);
+                new_value
+            }
+        };
+        
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            persistence.log_set(key_string, ValueType::Integer(result)).await?;
+        }
+        
+        Ok(result)
+    }
+
     /// Get memory usage statistics
     pub fn memory_stats(&self) -> MemoryStats {
         let key_count = self.data.len();
@@ -533,41 +749,41 @@ mod tests {
         assert!(default_store.is_empty());
     }
     
-    #[test]
-    fn test_memory_store_set_and_get() {
+    #[tokio::test]
+    async fn test_memory_store_set_and_get() {
         let store = MemoryStore::new();
         
         // Set a string value
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
         
         // Get the value
         let retrieved = store.get("key1").unwrap().unwrap();
-        assert_eq!(retrieved.as_string(), "value1");
+        assert_eq!(retrieved.value.to_string(), "value1");
         
         // Set an integer value
-        store.set("key2", 42i64).unwrap();
+        store.set("key2", 42i64).await.unwrap();
         assert_eq!(store.len(), 2);
         
         let retrieved_int = store.get("key2").unwrap().unwrap();
-        assert_eq!(retrieved_int.as_integer().unwrap(), 42);
+        assert_eq!(retrieved_int.value.to_integer().unwrap(), 42);
     }
     
-    #[test]
-    fn test_memory_store_overwrite() {
+    #[tokio::test]
+    async fn test_memory_store_overwrite() {
         let store = MemoryStore::new();
         
         // Set initial value
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         assert_eq!(store.len(), 1);
         
         // Overwrite with new value
-        store.set("key1", "value2").unwrap();
+        store.set("key1", "value2").await.unwrap();
         assert_eq!(store.len(), 1); // Should still be 1
         
         let retrieved = store.get("key1").unwrap().unwrap();
-        assert_eq!(retrieved.as_string(), "value2");
+        assert_eq!(retrieved.value.to_string(), "value2");
     }
     
     #[test]
@@ -578,49 +794,49 @@ mod tests {
         assert!(result.is_none());
     }
     
-    #[test]
-    fn test_memory_store_delete() {
+    #[tokio::test]
+    async fn test_memory_store_delete() {
         let store = MemoryStore::new();
         
         // Set a value
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         assert_eq!(store.len(), 1);
         
         // Delete the value
-        let deleted = store.delete("key1").unwrap();
+        let deleted = store.delete("key1").await.unwrap();
         assert!(deleted);
         assert_eq!(store.len(), 0);
         assert!(store.is_empty());
         
         // Try to delete non-existent key
-        let not_deleted = store.delete("nonexistent").unwrap();
+        let not_deleted = store.delete("nonexistent").await.unwrap();
         assert!(!not_deleted);
     }
     
-    #[test]
-    fn test_memory_store_exists() {
+    #[tokio::test]
+    async fn test_memory_store_exists() {
         let store = MemoryStore::new();
         
         // Check non-existent key
         assert!(!store.exists("key1").unwrap());
         
         // Set a value
-        store.set("key1", "value1").unwrap();
+        store.set("key1", "value1").await.unwrap();
         
         // Check existing key
         assert!(store.exists("key1").unwrap());
         
         // Delete and check again
-        store.delete("key1").unwrap();
+        store.delete("key1").await.unwrap();
         assert!(!store.exists("key1").unwrap());
     }
     
-    #[test]
-    fn test_memory_store_ttl_operations() {
+    #[tokio::test]
+    async fn test_memory_store_ttl_operations() {
         let store = MemoryStore::new();
         
         // Set value with TTL
-        store.set_with_ttl("key1", "value1", 60).unwrap();
+        store.set_with_ttl("key1", "value1", 60).await.unwrap();
         assert_eq!(store.len(), 1);
         
         // Check TTL
@@ -628,24 +844,24 @@ mod tests {
         assert!(ttl >= 59 && ttl <= 60);
         
         // Set expiration on existing key
-        store.set("key2", "value2").unwrap();
-        let expired = store.expire("key2", 30).unwrap();
+        store.set("key2", "value2").await.unwrap();
+        let expired = store.expire("key2", 30).await.unwrap();
         assert!(expired);
         
         let ttl2 = store.ttl("key2").unwrap();
         assert!(ttl2 >= 29 && ttl2 <= 30);
         
         // Try to expire non-existent key
-        let not_expired = store.expire("nonexistent", 30).unwrap();
+        let not_expired = store.expire("nonexistent", 30).await.unwrap();
         assert!(!not_expired);
     }
     
-    #[test]
-    fn test_memory_store_persist() {
+    #[tokio::test]
+    async fn test_memory_store_persist() {
         let store = MemoryStore::new();
         
         // Set value with TTL
-        store.set_with_ttl("key1", "value1", 60).unwrap();
+        store.set_with_ttl("key1", "value1", 60).await.unwrap();
         
         // Remove expiration
         let persisted = store.persist("key1").unwrap();
@@ -656,21 +872,21 @@ mod tests {
         assert_eq!(ttl, -1);
         
         // Try to persist key without expiration
-        store.set("key2", "value2").unwrap();
+        store.set("key2", "value2").await.unwrap();
         let not_persisted = store.persist("key2").unwrap();
         assert!(!not_persisted);
     }
     
-    #[test]
-    fn test_memory_store_expiration_handling() {
+    #[tokio::test]
+    async fn test_memory_store_expiration_handling() {
         let store = MemoryStore::new();
         
         // Set value with very short TTL
         let expires_at = Instant::now() + Duration::from_millis(1);
-        store.set_with_expiration("key1", "value1", expires_at).unwrap();
+        store.set_with_expiration("key1", "value1", expires_at).await.unwrap();
         
         // Wait for expiration
-        thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
         
         // Try to get expired key - should return None and clean up
         let result = store.get("key1").unwrap();
@@ -678,28 +894,28 @@ mod tests {
         assert_eq!(store.len(), 0);
         
         // exists() should also handle expiration
-        store.set_with_expiration("key2", "value2", Instant::now() + Duration::from_millis(1)).unwrap();
-        thread::sleep(Duration::from_millis(10));
+        store.set_with_expiration("key2", "value2", Instant::now() + Duration::from_millis(1)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
         
         let exists = store.exists("key2").unwrap();
         assert!(!exists);
         assert_eq!(store.len(), 0);
     }
     
-    #[test]
-    fn test_memory_store_cleanup_expired() {
+    #[tokio::test]
+    async fn test_memory_store_cleanup_expired() {
         let store = MemoryStore::new();
         
         // Set some values with short TTL
         let expires_at = Instant::now() + Duration::from_millis(1);
-        store.set_with_expiration("key1", "value1", expires_at).unwrap();
-        store.set_with_expiration("key2", "value2", expires_at).unwrap();
-        store.set("key3", "value3").unwrap(); // No expiration
+        store.set_with_expiration("key1", "value1", expires_at).await.unwrap();
+        store.set_with_expiration("key2", "value2", expires_at).await.unwrap();
+        store.set("key3", "value3").await.unwrap(); // No expiration
         
         assert_eq!(store.len(), 3);
         
         // Wait for expiration
-        thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
         
         // Clean up expired keys
         let removed_count = store.cleanup_expired();
@@ -712,14 +928,14 @@ mod tests {
         assert!(!store.exists("key2").unwrap());
     }
     
-    #[test]
-    fn test_memory_store_keys_and_clear() {
+    #[tokio::test]
+    async fn test_memory_store_keys_and_clear() {
         let store = MemoryStore::new();
         
         // Set some values
-        store.set("key1", "value1").unwrap();
-        store.set("key2", "value2").unwrap();
-        store.set("key3", "value3").unwrap();
+        store.set("key1", "value1").await.unwrap();
+        store.set("key2", "value2").await.unwrap();
+        store.set("key3", "value3").await.unwrap();
         
         // Get all keys
         let keys = store.keys();
@@ -735,8 +951,8 @@ mod tests {
         assert!(store.keys().is_empty());
     }
     
-    #[test]
-    fn test_memory_store_memory_stats() {
+    #[tokio::test]
+    async fn test_memory_store_memory_stats() {
         let store = MemoryStore::new();
         
         // Initial stats
@@ -745,8 +961,8 @@ mod tests {
         assert_eq!(stats.expiration_count, 0);
         
         // Add some data
-        store.set("key1", "value1").unwrap();
-        store.set_with_ttl("key2", "value2", 60).unwrap();
+        store.set("key1", "value1").await.unwrap();
+        store.set_with_ttl("key2", "value2", 60).await.unwrap();
         
         let stats = store.memory_stats();
         assert_eq!(stats.key_count, 2);
@@ -755,31 +971,31 @@ mod tests {
     }
     
     // Concurrent access tests
-    #[test]
-    fn test_concurrent_set_get() {
+    #[tokio::test]
+    async fn test_concurrent_set_get() {
         let store = Arc::new(MemoryStore::new());
         let mut handles = vec![];
         
-        // Spawn multiple threads that set and get values
+        // Spawn multiple tasks that set and get values
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
-            let handle = thread::spawn(move || {
+            let handle = tokio::spawn(async move {
                 let key = format!("key{}", i);
                 let value = format!("value{}", i);
                 
                 // Set value
-                store_clone.set(&key, value.as_str()).unwrap();
+                store_clone.set(&key, value.as_str()).await.unwrap();
                 
                 // Get value back
                 let retrieved = store_clone.get(&key).unwrap().unwrap();
-                assert_eq!(retrieved.as_string(), value);
+                assert_eq!(retrieved.value.to_string(), value);
             });
             handles.push(handle);
         }
         
-        // Wait for all threads to complete
+        // Wait for all tasks to complete
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
         
         // Verify all values are present
@@ -788,23 +1004,23 @@ mod tests {
             let key = format!("key{}", i);
             let expected_value = format!("value{}", i);
             let retrieved = store.get(&key).unwrap().unwrap();
-            assert_eq!(retrieved.as_string(), expected_value);
+            assert_eq!(retrieved.value.to_string(), expected_value);
         }
     }
     
-    #[test]
-    fn test_concurrent_same_key_access() {
+    #[tokio::test]
+    async fn test_concurrent_same_key_access() {
         let store = Arc::new(MemoryStore::new());
         let mut handles = vec![];
         
-        // Multiple threads accessing the same key
+        // Multiple tasks accessing the same key
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
-            let handle = thread::spawn(move || {
+            let handle = tokio::spawn(async move {
                 let value = format!("value{}", i);
                 
                 // Set value (last one wins)
-                store_clone.set("shared_key", value.as_str()).unwrap();
+                store_clone.set("shared_key", value.as_str()).await.unwrap();
                 
                 // Try to get the value
                 let _retrieved = store_clone.get("shared_key").unwrap();
@@ -812,9 +1028,9 @@ mod tests {
             handles.push(handle);
         }
         
-        // Wait for all threads to complete
+        // Wait for all tasks to complete
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
         
         // Should have exactly one key
@@ -822,34 +1038,34 @@ mod tests {
         assert!(store.exists("shared_key").unwrap());
     }
     
-    #[test]
-    fn test_concurrent_delete_operations() {
+    #[tokio::test]
+    async fn test_concurrent_delete_operations() {
         let store = Arc::new(MemoryStore::new());
         
         // Pre-populate with data
         for i in 0..20 {
             let key = format!("key{}", i);
             let value = format!("value{}", i);
-            store.set(&key, value.as_str()).unwrap();
+            store.set(&key, value.as_str()).await.unwrap();
         }
         
         assert_eq!(store.len(), 20);
         
         let mut handles = vec![];
         
-        // Spawn threads to delete half the keys
+        // Spawn tasks to delete half the keys
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
-            let handle = thread::spawn(move || {
+            let handle = tokio::spawn(async move {
                 let key = format!("key{}", i);
-                store_clone.delete(&key).unwrap();
+                store_clone.delete(&key).await.unwrap();
             });
             handles.push(handle);
         }
         
         // Wait for all deletions to complete
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
         
         // Should have 10 keys remaining
@@ -867,8 +1083,8 @@ mod tests {
         }
     }
     
-    #[test]
-    fn test_concurrent_expiration_operations() {
+    #[tokio::test]
+    async fn test_concurrent_expiration_operations() {
         let store = Arc::new(MemoryStore::new());
         let mut handles = vec![];
         
@@ -876,23 +1092,23 @@ mod tests {
         for i in 0..10 {
             let key = format!("key{}", i);
             let value = format!("value{}", i);
-            store.set(&key, value.as_str()).unwrap();
+            store.set(&key, value.as_str()).await.unwrap();
         }
         
-        // Spawn threads to set expiration on keys
+        // Spawn tasks to set expiration on keys
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
-            let handle = thread::spawn(move || {
+            let handle = tokio::spawn(async move {
                 let key = format!("key{}", i);
                 let ttl = 60 + i as u64; // Different TTL for each key
-                store_clone.expire(&key, ttl).unwrap();
+                let _expired = store_clone.expire(&key, ttl).await.unwrap();
             });
             handles.push(handle);
         }
         
         // Wait for all operations to complete
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
         
         // Verify all keys have expiration set
@@ -903,22 +1119,22 @@ mod tests {
         }
     }
     
-    #[test]
-    fn test_concurrent_mixed_operations() {
+    #[tokio::test]
+    async fn test_concurrent_mixed_operations() {
         let store = Arc::new(MemoryStore::new());
         let mut handles = vec![];
         
-        // Spawn threads doing different operations
+        // Spawn tasks doing different operations
         for i in 0..20 {
             let store_clone = Arc::clone(&store);
-            let handle = thread::spawn(move || {
+            let handle = tokio::spawn(async move {
                 let key = format!("key{}", i % 10); // Use 10 different keys
                 
                 match i % 4 {
                     0 => {
                         // Set operation
                         let value = format!("value{}", i);
-                        store_clone.set(&key, value.as_str()).unwrap();
+                        store_clone.set(&key, value.as_str()).await.unwrap();
                     }
                     1 => {
                         // Get operation
@@ -930,7 +1146,7 @@ mod tests {
                     }
                     3 => {
                         // Expire operation
-                        let _expired = store_clone.expire(&key, 60).unwrap();
+                        let _expired = store_clone.expire(&key, 60).await.unwrap();
                     }
                     _ => unreachable!(),
                 }
@@ -940,7 +1156,7 @@ mod tests {
         
         // Wait for all operations to complete
         for handle in handles {
-            handle.join().unwrap();
+            handle.await.unwrap();
         }
         
         // Store should be in a consistent state
@@ -951,8 +1167,8 @@ mod tests {
         assert!(stats.key_count <= 10);
     }
     
-    #[test]
-    fn test_concurrent_cleanup_expired() {
+    #[tokio::test]
+    async fn test_concurrent_cleanup_expired() {
         let store = Arc::new(MemoryStore::new());
         
         // Set values with very short TTL
@@ -960,20 +1176,20 @@ mod tests {
             let key = format!("key{}", i);
             let value = format!("value{}", i);
             let expires_at = Instant::now() + Duration::from_millis(1);
-            store.set_with_expiration(&key, value.as_str(), expires_at).unwrap();
+            store.set_with_expiration(&key, value.as_str(), expires_at).await.unwrap();
         }
         
         assert_eq!(store.len(), 20);
         
         // Wait for expiration
-        thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
         
         let mut handles = vec![];
         
-        // Spawn multiple threads to clean up expired keys
+        // Spawn multiple tasks to clean up expired keys
         for _ in 0..5 {
             let store_clone = Arc::clone(&store);
-            let handle = thread::spawn(move || {
+            let handle = tokio::spawn(async move {
                 store_clone.cleanup_expired()
             });
             handles.push(handle);
@@ -982,10 +1198,10 @@ mod tests {
         // Wait for all cleanup operations to complete
         let mut total_removed = 0;
         for handle in handles {
-            total_removed += handle.join().unwrap();
+            total_removed += handle.await.unwrap();
         }
         
-        // All keys should be removed (some threads might not find any to remove)
+        // All keys should be removed (some tasks might not find any to remove)
         assert!(total_removed <= 20);
         assert_eq!(store.len(), 0);
     }
@@ -1025,6 +1241,63 @@ mod tests {
         let now = Instant::now();
         assert!(now.duration_since(stored.created_at) < Duration::from_millis(100));
         assert!(now.duration_since(stored.last_accessed) < Duration::from_millis(100));
+    }
+    
+    // Atomic operation tests
+    #[tokio::test]
+    async fn test_incr_new_key() {
+        let store = MemoryStore::new();
+        
+        let result = store.incr("new_key").await.unwrap();
+        assert_eq!(result, 1);
+        
+        let stored = store.get("new_key").unwrap().unwrap();
+        assert_eq!(stored.value.to_integer().unwrap(), 1);
+    }
+    
+    #[tokio::test]
+    async fn test_incr_existing_integer() {
+        let store = MemoryStore::new();
+        
+        store.set("key1", 5i64).await.unwrap();
+        let result = store.incr("key1").await.unwrap();
+        assert_eq!(result, 6);
+        
+        let stored = store.get("key1").unwrap().unwrap();
+        assert_eq!(stored.value.to_integer().unwrap(), 6);
+    }
+    
+    #[tokio::test]
+    async fn test_incr_existing_string_number() {
+        let store = MemoryStore::new();
+        
+        store.set("key1", "42").await.unwrap();
+        let result = store.incr("key1").await.unwrap();
+        assert_eq!(result, 43);
+        
+        let stored = store.get("key1").unwrap().unwrap();
+        assert_eq!(stored.value.to_integer().unwrap(), 43);
+    }
+    
+    #[tokio::test]
+    async fn test_incr_non_numeric_string() {
+        let store = MemoryStore::new();
+        
+        store.set("key1", "not_a_number").await.unwrap();
+        let result = store.incr("key1").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RustyPotatoError::NotAnInteger));
+    }
+    
+    #[tokio::test]
+    async fn test_decr_new_key() {
+        let store = MemoryStore::new();
+        
+        let result = store.decr("new_key").await.unwrap();
+        assert_eq!(result, -1);
+        
+        let stored = store.get("new_key").unwrap().unwrap();
+        assert_eq!(stored.value.to_integer().unwrap(), -1);
     }
 }
 

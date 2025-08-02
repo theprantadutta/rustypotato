@@ -57,7 +57,7 @@ impl RustyPotatoError {
     pub fn to_client_error(&self) -> String {
         match self {
             RustyPotatoError::InvalidCommand(cmd) => format!("ERR unknown command '{}'", cmd),
-            RustyPotatoError::WrongArity { command, expected, actual } => {
+            RustyPotatoError::WrongArity { command, expected: _, actual: _ } => {
                 format!("ERR wrong number of arguments for '{}' command", command)
             }
             RustyPotatoError::NotAnInteger => "ERR value is not an integer or out of range".to_string(),

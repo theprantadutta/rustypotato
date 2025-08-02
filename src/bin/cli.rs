@@ -3,7 +3,7 @@
 //! Command-line interface for interacting with RustyPotato servers
 
 use clap::Parser;
-use rusty_potato::cli::{Cli, Commands, CliClient};
+use rustypotato::cli::{Cli, Commands, CliClient};
 use tracing::{info, error};
 
 #[tokio::main]
