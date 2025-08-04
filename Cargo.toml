@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["RustyPotato Team"]
 description = "A high-performance Redis-compatible key-value store"
+repository = "https://github.com/theprantadutta/rustypotato"
 license = "MIT OR Apache-2.0"
 keywords = ["database", "redis", "key-value", "storage"]
 categories = ["database-implementations"]

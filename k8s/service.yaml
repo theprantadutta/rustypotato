@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustypotato-service
+  labels:
+    app: rustypotato
+spec:
+  selector:
+    app: rustypotato
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+    protocol: TCP
+  type: LoadBalancer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustypotato-headless
+  labels:
+    app: rustypotato
+spec:
+  selector:
+    app: rustypotato
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+    protocol: TCP
+  clusterIP: None
+  type: ClusterIP

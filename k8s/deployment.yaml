@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustypotato
+  labels:
+    app: rustypotato
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: rustypotato
+  template:
+    metadata:
+      labels:
+        app: rustypotato
+    spec:
+      containers:
+      - name: rustypotato
+        image: theprantadutta/rustypotato:latest
+        ports:
+        - containerPort: 6379
+          name: redis
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: RUSTYPOTATO_BIND_ADDRESS
+          value: "0.0.0.0"
+        - name: RUSTYPOTATO_LOG_LEVEL
+          value: "info"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /etc/rustypotato
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - rustypotato-cli
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - rustypotato-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: rustypotato-pvc
+      - name: config
+        configMap:
+          name: rustypotato-config
+      securityContext:
+        fsGroup: 1000
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rustypotato-pvc
+  labels:
+    app: rustypotato
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd

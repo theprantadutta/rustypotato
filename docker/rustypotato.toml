@@ -1,0 +1,35 @@
+# RustyPotato Docker Configuration
+
+[server]
+port = 6379
+bind_address = "0.0.0.0"
+max_connections = 10000
+tcp_keepalive = true
+tcp_nodelay = true
+
+[storage]
+# Persistence settings
+aof_enabled = true
+aof_path = "/data/rustypotato.aof"
+aof_fsync = "everysec"  # always, everysec, no
+
+# Memory settings
+max_memory = "1GB"
+eviction_policy = "lru"  # lru, lfu, random, ttl
+
+[logging]
+level = "info"  # trace, debug, info, warn, error
+format = "json"  # json, pretty
+file = "/var/log/rustypotato/rustypotato.log"
+
+[metrics]
+enabled = true
+port = 9090
+path = "/metrics"
+
+[security]
+# Authentication disabled by default in Docker
+auth_enabled = false
+
+# TLS disabled by default
+tls_enabled = false
