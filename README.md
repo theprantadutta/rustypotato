@@ -7,6 +7,16 @@
 
 A high-performance, Redis-compatible key-value store built in Rust with unique features for modern applications.
 
+> ⚠️ **WARNING: PROJECT UNDER ACTIVE DEVELOPMENT**
+>
+> 🚧 This project is a work in progress and not ready for production use.  
+> Please do **NOT** use this in critical systems, production environments, or anywhere stability is required.  
+> APIs, features, and internal implementations are subject to heavy change — possibly without warning.  
+>
+> Stay tuned for updates and the official release coming soon™.  
+> In the meantime, feel free to explore, experiment, or contribute — just don’t deploy it to your spaceship. 🛸
+
+
 ## 🚀 What is RustyPotato?
 
 RustyPotato is a next-generation key-value store that combines Redis compatibility with innovative features powered by Rust's safety and performance guarantees. It's designed for developers who need the reliability of Redis with advanced capabilities like data branching, time travel debugging, and WebAssembly plugin support.
