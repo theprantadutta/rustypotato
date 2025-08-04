@@ -2,17 +2,78 @@
 //! 
 //! This module handles individual client connections and maintains a pool
 //! of active connections with configurable limits and statistics tracking.
+//! Includes optimized buffer reuse and connection pooling for performance.
 
 use crate::error::{RustyPotatoError, Result};
+use bytes::BytesMut;
 use dashmap::DashMap;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpStream;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 use uuid::Uuid;
+
+/// Buffer pool for reusing BytesMut instances to reduce allocations
+pub struct BufferPool {
+    buffers: Arc<Mutex<VecDeque<BytesMut>>>,
+    max_buffers: usize,
+    buffer_size: usize,
+}
+
+impl BufferPool {
+    /// Create a new buffer pool with specified capacity and buffer size
+    pub fn new(max_buffers: usize, buffer_size: usize) -> Self {
+        Self {
+            buffers: Arc::new(Mutex::new(VecDeque::with_capacity(max_buffers))),
+            max_buffers,
+            buffer_size,
+        }
+    }
+
+    /// Get a buffer from the pool or create a new one
+    pub async fn get_buffer(&self) -> BytesMut {
+        let mut buffers = self.buffers.lock().await;
+        if let Some(mut buffer) = buffers.pop_front() {
+            buffer.clear();
+            buffer
+        } else {
+            BytesMut::with_capacity(self.buffer_size)
+        }
+    }
+
+    /// Return a buffer to the pool for reuse
+    pub async fn return_buffer(&self, buffer: BytesMut) {
+        if buffer.capacity() >= self.buffer_size / 2 && buffer.capacity() <= self.buffer_size * 2 {
+            let mut buffers = self.buffers.lock().await;
+            if buffers.len() < self.max_buffers {
+                buffers.push_back(buffer);
+            }
+        }
+        // If buffer is too small/large or pool is full, just drop it
+    }
+
+    /// Get current pool statistics
+    pub async fn stats(&self) -> BufferPoolStats {
+        let buffers = self.buffers.lock().await;
+        BufferPoolStats {
+            available_buffers: buffers.len(),
+            max_buffers: self.max_buffers,
+            buffer_size: self.buffer_size,
+        }
+    }
+}
+
+/// Buffer pool statistics
+#[derive(Debug, Clone)]
+pub struct BufferPoolStats {
+    pub available_buffers: usize,
+    pub max_buffers: usize,
+    pub buffer_size: usize,
+}
 
 /// Client connection representation with metadata and stream
 #[derive(Debug)]
@@ -23,6 +84,8 @@ pub struct ClientConnection {
     pub connected_at: Instant,
     pub last_activity: Arc<RwLock<Instant>>,
     pub commands_processed: Arc<AtomicU64>,
+    pub bytes_read: Arc<AtomicU64>,
+    pub bytes_written: Arc<AtomicU64>,
 }
 
 impl ClientConnection {
@@ -37,6 +100,8 @@ impl ClientConnection {
             connected_at: now,
             last_activity: Arc::new(RwLock::new(now)),
             commands_processed: Arc::new(AtomicU64::new(0)),
+            bytes_read: Arc::new(AtomicU64::new(0)),
+            bytes_written: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -61,6 +126,26 @@ impl ClientConnection {
         self.commands_processed.load(Ordering::Relaxed)
     }
 
+    /// Add bytes read
+    pub fn add_bytes_read(&self, bytes: u64) {
+        self.bytes_read.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Add bytes written
+    pub fn add_bytes_written(&self, bytes: u64) {
+        self.bytes_written.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Get total bytes read
+    pub fn get_bytes_read(&self) -> u64 {
+        self.bytes_read.load(Ordering::Relaxed)
+    }
+
+    /// Get total bytes written
+    pub fn get_bytes_written(&self) -> u64 {
+        self.bytes_written.load(Ordering::Relaxed)
+    }
+
     /// Get connection duration
     pub fn connection_duration(&self) -> std::time::Duration {
         self.connected_at.elapsed()
@@ -74,6 +159,8 @@ impl ClientConnection {
             connected_at: self.connected_at,
             last_activity: self.get_last_activity().await,
             commands_processed: self.get_commands_processed(),
+            bytes_read: self.get_bytes_read(),
+            bytes_written: self.get_bytes_written(),
             connection_duration: self.connection_duration(),
         }
     }
@@ -89,6 +176,8 @@ pub struct ConnectionInfo {
     pub connected_at: Instant,
     pub last_activity: Instant,
     pub commands_processed: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
     pub connection_duration: std::time::Duration,
 }
 
@@ -98,17 +187,38 @@ pub struct ConnectionPool {
     max_connections: usize,
     total_connections_accepted: AtomicU64,
     total_connections_rejected: AtomicU64,
+    buffer_pool: Arc<BufferPool>,
 }
 
 impl ConnectionPool {
     /// Create a new connection pool with the specified maximum connections
     pub fn new(max_connections: usize) -> Self {
+        // Create buffer pool with reasonable defaults
+        let buffer_pool_size = (max_connections / 10).max(10).min(1000);
+        let buffer_pool = Arc::new(BufferPool::new(buffer_pool_size, 8192));
+        
         Self {
             connections: DashMap::new(),
             max_connections,
             total_connections_accepted: AtomicU64::new(0),
             total_connections_rejected: AtomicU64::new(0),
+            buffer_pool,
         }
+    }
+
+    /// Get a buffer from the pool
+    pub async fn get_buffer(&self) -> BytesMut {
+        self.buffer_pool.get_buffer().await
+    }
+
+    /// Return a buffer to the pool
+    pub async fn return_buffer(&self, buffer: BytesMut) {
+        self.buffer_pool.return_buffer(buffer).await;
+    }
+
+    /// Get buffer pool statistics
+    pub async fn buffer_pool_stats(&self) -> BufferPoolStats {
+        self.buffer_pool.stats().await
     }
 
     /// Check if a new connection can be accepted
@@ -120,9 +230,11 @@ impl ConnectionPool {
     pub async fn add_connection(&self, connection: ClientConnection) -> Result<()> {
         if !self.can_accept_connection().await {
             self.total_connections_rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(RustyPotatoError::NetworkError(
-                "Connection pool is full".to_string()
-            ));
+            return Err(RustyPotatoError::NetworkError {
+                message: "Connection pool is full".to_string(),
+                source: None,
+                connection_id: None,
+            });
         }
 
         let client_id = connection.client_id;
@@ -142,9 +254,11 @@ impl ConnectionPool {
             }
             None => {
                 warn!("Attempted to remove non-existent connection: {}", client_id);
-                Err(RustyPotatoError::NetworkError(
-                    format!("Connection {} not found in pool", client_id)
-                ))
+                Err(RustyPotatoError::NetworkError {
+                    message: format!("Connection {} not found in pool", client_id),
+                    source: None,
+                    connection_id: Some(client_id.to_string()),
+                })
             }
         }
     }
@@ -510,12 +624,16 @@ mod tests {
             connected_at: now,
             last_activity: now,
             commands_processed: 42,
+            bytes_read: 1024,
+            bytes_written: 512,
             connection_duration: Duration::from_secs(10),
         };
         
         assert_eq!(info.client_id, client_id);
         assert_eq!(info.remote_addr, remote_addr);
         assert_eq!(info.commands_processed, 42);
+        assert_eq!(info.bytes_read, 1024);
+        assert_eq!(info.bytes_written, 512);
         assert_eq!(info.connection_duration, Duration::from_secs(10));
     }
 }

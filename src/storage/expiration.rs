@@ -75,14 +75,22 @@ impl ExpirationManager {
     pub fn add_expiration(&self, key: String, expires_at: Instant) -> Result<()> {
         self.command_sender
             .send(ExpirationCommand::AddExpiration { key, expires_at })
-            .map_err(|_| RustyPotatoError::InternalError("Failed to send expiration command".to_string()))
+            .map_err(|_| RustyPotatoError::InternalError {
+                message: "Failed to send expiration command".to_string(),
+                component: Some("expiration_manager".to_string()),
+                source: None,
+            })
     }
     
     /// Remove a key from the expiration queue
     pub fn remove_expiration(&self, key: String) -> Result<()> {
         self.command_sender
             .send(ExpirationCommand::RemoveExpiration { key })
-            .map_err(|_| RustyPotatoError::InternalError("Failed to send expiration command".to_string()))
+            .map_err(|_| RustyPotatoError::InternalError {
+                message: "Failed to send expiration command".to_string(),
+                component: Some("expiration_manager".to_string()),
+                source: None,
+            })
     }
     
     /// Shutdown the expiration manager
@@ -96,9 +104,11 @@ impl ExpirationManager {
         if let Some(handle) = self.cleanup_handle.take() {
             if let Err(e) = handle.await {
                 error!("Expiration manager cleanup task failed: {}", e);
-                return Err(RustyPotatoError::InternalError(format!(
-                    "Expiration manager cleanup task failed: {}", e
-                )));
+                return Err(RustyPotatoError::InternalError {
+                    message: format!("Expiration manager cleanup task failed: {}", e),
+                    component: Some("expiration_manager".to_string()),
+                    source: None,
+                });
             }
         }
         

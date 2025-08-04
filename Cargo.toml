@@ -20,7 +20,7 @@ dashmap = "5.0"
 
 # Structured logging and instrumentation
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "chrono"] }
 
 # Ergonomic error handling
 thiserror = "1.0"
@@ -30,6 +30,7 @@ bytes = "1.0"
 
 # Additional core dependencies
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 
@@ -37,6 +38,11 @@ async-trait = "0.1"
 toml = "0.8"
 config = "0.14"
 dirs = "5.0"
+
+# Monitoring and health checks
+chrono = { version = "0.4", features = ["serde"] }
+sys-info = "0.9"
+flate2 = "1.0"
 
 [[bin]]
 name = "rustypotato-server"
@@ -48,6 +54,13 @@ path = "src/bin/cli.rs"
 
 [dev-dependencies]
 tokio-test = "0.4"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 proptest = "1.0"
 tempfile = "3.0"
+tracing-test = "0.2"
+fastrand = "2.0"
+futures = "0.3"
+
+[[bench]]
+name = "performance_benchmarks"
+harness = false

@@ -1,0 +1,441 @@
+//! Comprehensive unit tests for metrics collection and reporting
+//!
+//! Tests cover metrics collection, aggregation, reporting,
+//! and performance monitoring functionality.
+
+use rustypotato::{MetricsCollector, MetricsServer};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
+
+#[cfg(test)]
+mod metrics_collector_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_metrics_collector_creation() {
+        let collector = MetricsCollector::new();
+        
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_commands, 0);
+        assert_eq!(summary.total_connections, 0);
+        assert_eq!(summary.active_connections, 0);
+        assert_eq!(summary.total_bytes_read, 0);
+        assert_eq!(summary.total_bytes_written, 0);
+        assert!(summary.command_latencies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_command_metrics() {
+        let collector = MetricsCollector::new();
+        
+        // Record some command executions
+        collector.record_command_execution("SET").await;
+        collector.record_command_execution("GET").await;
+        collector.record_command_execution("SET").await;
+        
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_commands, 3);
+        
+        // Check command counts
+        let command_counts = collector.get_command_counts().await;
+        assert_eq!(command_counts.get("SET"), Some(&2));
+        assert_eq!(command_counts.get("GET"), Some(&1));
+        assert_eq!(command_counts.get("DEL"), None);
+    }
+
+    #[tokio::test]
+    async fn test_command_latency_metrics() {
+        let collector = MetricsCollector::new();
+        
+        // Record command latencies
+        collector.record_command_latency("SET", Duration::from_micros(100)).await;
+        collector.record_command_latency("SET", Duration::from_micros(200)).await;
+        collector.record_command_latency("GET", Duration::from_micros(50)).await;
+        
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.command_latencies.len(), 2);
+        
+        // Check SET latencies
+        if let Some(set_stats) = summary.command_latencies.get("SET") {
+            assert_eq!(set_stats.count, 2);
+            assert_eq!(set_stats.total_duration, Duration::from_micros(300));
+            assert_eq!(set_stats.avg_duration(), Duration::from_micros(150));
+            assert_eq!(set_stats.min_duration, Duration::from_micros(100));
+            assert_eq!(set_stats.max_duration, Duration::from_micros(200));
+        } else {
+            panic!("Expected SET latency stats");
+        }
+        
+        // Check GET latencies
+        if let Some(get_stats) = summary.command_latencies.get("GET") {
+            assert_eq!(get_stats.count, 1);
+            assert_eq!(get_stats.total_duration, Duration::from_micros(50));
+            assert_eq!(get_stats.avg_duration(), Duration::from_micros(50));
+        } else {
+            panic!("Expected GET latency stats");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connection_metrics() {
+        let collector = MetricsCollector::new();
+        
+        // Record connection events
+        collector.record_connection_opened().await;
+        collector.record_connection_opened().await;
+        collector.record_connection_closed().await;
+        
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_connections, 2);
+        assert_eq!(summary.active_connections, 1);
+    }
+
+    #[tokio::test]
+    async fn test_network_metrics() {
+        let collector = MetricsCollector::new();
+        
+        // Record network I/O
+        collector.record_network_bytes(1024, 512).await;
+        collector.record_network_bytes(2048, 1024).await;
+        
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_bytes_read, 3072);
+        assert_eq!(summary.total_bytes_written, 1536);
+    }
+
+    #[tokio::test]
+    async fn test_error_metrics() {
+        let collector = MetricsCollector::new();
+        
+        // Record errors
+        collector.record_error("InvalidCommand").await;
+        collector.record_error("WrongArity").await;
+        collector.record_error("InvalidCommand").await;
+        
+        let error_counts = collector.get_error_counts().await;
+        assert_eq!(error_counts.get("InvalidCommand"), Some(&2));
+        assert_eq!(error_counts.get("WrongArity"), Some(&1));
+        assert_eq!(error_counts.get("NotAnInteger"), None);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_reset() {
+        let collector = MetricsCollector::new();
+        
+        // Record some metrics
+        collector.record_command_execution("SET").await;
+        collector.record_connection_opened().await;
+        collector.record_network_bytes(1024, 512).await;
+        collector.record_error("InvalidCommand").await;
+        
+        // Verify metrics are recorded
+        let summary = collector.get_summary().await;
+        assert!(summary.total_commands > 0);
+        assert!(summary.total_connections > 0);
+        assert!(summary.total_bytes_read > 0);
+        
+        // Reset metrics
+        collector.reset().await;
+        
+        // Verify metrics are reset
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_commands, 0);
+        assert_eq!(summary.total_connections, 0);
+        assert_eq!(summary.active_connections, 0);
+        assert_eq!(summary.total_bytes_read, 0);
+        assert_eq!(summary.total_bytes_written, 0);
+        assert!(summary.command_latencies.is_empty());
+        
+        let error_counts = collector.get_error_counts().await;
+        assert!(error_counts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_metrics_collection() {
+        let collector = Arc::new(MetricsCollector::new());
+        let mut handles = Vec::new();
+        
+        // Spawn multiple tasks recording metrics concurrently
+        for i in 0..10 {
+            let collector_clone = Arc::clone(&collector);
+            let handle = tokio::spawn(async move {
+                // Each task records different metrics
+                collector_clone.record_command_execution("SET").await;
+                collector_clone.record_command_latency("SET", Duration::from_micros(100 + i * 10)).await;
+                collector_clone.record_connection_opened().await;
+                collector_clone.record_network_bytes(1024, 512).await;
+                
+                if i % 3 == 0 {
+                    collector_clone.record_error("TestError").await;
+                }
+                
+                i
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all tasks to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        
+        // Verify final metrics
+        let summary = collector.get_summary().await;
+        assert_eq!(summary.total_commands, 10);
+        assert_eq!(summary.total_connections, 10);
+        assert_eq!(summary.active_connections, 10);
+        assert_eq!(summary.total_bytes_read, 10240);
+        assert_eq!(summary.total_bytes_written, 5120);
+        
+        // Check SET command latencies
+        if let Some(set_stats) = summary.command_latencies.get("SET") {
+            assert_eq!(set_stats.count, 10);
+            assert!(set_stats.min_duration <= set_stats.max_duration);
+        } else {
+            panic!("Expected SET latency stats");
+        }
+        
+        // Check error counts
+        let error_counts = collector.get_error_counts().await;
+        assert_eq!(error_counts.get("TestError"), Some(&4)); // 0, 3, 6, 9
+    }
+
+    #[tokio::test]
+    async fn test_metrics_edge_cases() {
+        let collector = MetricsCollector::new();
+        
+        // Test with zero duration
+        collector.record_command_latency("FAST", Duration::from_nanos(0)).await;
+        
+        // Test with very large duration
+        collector.record_command_latency("SLOW", Duration::from_secs(60)).await;
+        
+        // Test with empty command name
+        collector.record_command_execution("").await;
+        
+        // Test with very long command name
+        let long_command = "A".repeat(1000);
+        collector.record_command_execution(&long_command).await;
+        
+        // Test with zero bytes
+        collector.record_network_bytes(0, 0).await;
+        
+        // Test with large byte counts
+        collector.record_network_bytes(u64::MAX / 2, u64::MAX / 2).await;
+        
+        let summary = collector.get_summary().await;
+        assert!(summary.total_commands > 0);
+        assert!(summary.total_bytes_read > 0);
+        assert!(summary.command_latencies.contains_key("FAST"));
+        assert!(summary.command_latencies.contains_key("SLOW"));
+    }
+
+    #[tokio::test]
+    async fn test_metrics_time_windows() {
+        let collector = MetricsCollector::new();
+        
+        // Record metrics at different times
+        collector.record_command_execution("SET").await;
+        sleep(Duration::from_millis(10)).await;
+        collector.record_command_execution("GET").await;
+        sleep(Duration::from_millis(10)).await;
+        collector.record_command_execution("DEL").await;
+        
+        // Get metrics for different time windows
+        let recent_summary = collector.get_summary_since(Duration::from_millis(15)).await;
+        let all_summary = collector.get_summary().await;
+        
+        // Recent summary should have fewer commands
+        assert!(recent_summary.total_commands <= all_summary.total_commands);
+        assert_eq!(all_summary.total_commands, 3);
+    }
+}
+
+#[cfg(test)]
+mod metrics_server_tests {
+    use super::*;
+    use tokio::net::TcpStream;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn test_metrics_server_creation() {
+        let collector = Arc::new(MetricsCollector::new());
+        let server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        
+        assert_eq!(server.bind_address(), "127.0.0.1:0");
+        assert!(!server.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_metrics_server_start_stop() {
+        let collector = Arc::new(MetricsCollector::new());
+        let mut server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        
+        // Start server
+        let addr = server.start().await.unwrap();
+        assert!(addr.port() > 0);
+        
+        // Give server time to start
+        sleep(Duration::from_millis(50)).await;
+        
+        // Verify we can connect
+        let stream = TcpStream::connect(addr).await;
+        assert!(stream.is_ok());
+        
+        // Shutdown server
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_http_endpoint() {
+        let collector = Arc::new(MetricsCollector::new());
+        
+        // Add some test metrics
+        collector.record_command_execution("SET").await;
+        collector.record_command_execution("GET").await;
+        collector.record_command_latency("SET", Duration::from_micros(100)).await;
+        collector.record_connection_opened().await;
+        collector.record_network_bytes(1024, 512).await;
+        
+        let mut server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        let addr = server.start().await.unwrap();
+        
+        sleep(Duration::from_millis(50)).await;
+        
+        // Make HTTP request to metrics endpoint
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = "GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        
+        // Read response
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        
+        // Verify response contains metrics
+        assert!(response.contains("HTTP/1.1 200 OK"));
+        assert!(response.contains("total_commands"));
+        assert!(response.contains("total_connections"));
+        assert!(response.contains("total_bytes_read"));
+        assert!(response.contains("command_latencies"));
+        
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_json_format() {
+        let collector = Arc::new(MetricsCollector::new());
+        
+        // Add test data
+        collector.record_command_execution("SET").await;
+        collector.record_error("InvalidCommand").await;
+        
+        let mut server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        let addr = server.start().await.unwrap();
+        
+        sleep(Duration::from_millis(50)).await;
+        
+        // Request JSON format
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = "GET /metrics?format=json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        
+        // Verify JSON response
+        assert!(response.contains("HTTP/1.1 200 OK"));
+        assert!(response.contains("application/json"));
+        assert!(response.contains("\"total_commands\""));
+        assert!(response.contains("\"total_connections\""));
+        
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_health_endpoint() {
+        let collector = Arc::new(MetricsCollector::new());
+        let mut server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        let addr = server.start().await.unwrap();
+        
+        sleep(Duration::from_millis(50)).await;
+        
+        // Request health endpoint
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        
+        // Verify health response
+        assert!(response.contains("HTTP/1.1 200 OK"));
+        assert!(response.contains("OK") || response.contains("healthy"));
+        
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_server_error_handling() {
+        let collector = Arc::new(MetricsCollector::new());
+        let mut server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        let addr = server.start().await.unwrap();
+        
+        sleep(Duration::from_millis(50)).await;
+        
+        // Test invalid endpoint
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = "GET /invalid HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+        
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        
+        // Should return 404
+        assert!(response.contains("HTTP/1.1 404 Not Found"));
+        
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_metrics_server_concurrent_requests() {
+        let collector = Arc::new(MetricsCollector::new());
+        
+        // Add some test metrics
+        for i in 0..100 {
+            collector.record_command_execution("SET").await;
+            collector.record_command_latency("SET", Duration::from_micros(100 + i)).await;
+        }
+        
+        let mut server = MetricsServer::new(collector, "127.0.0.1:0".to_string());
+        let addr = server.start().await.unwrap();
+        
+        sleep(Duration::from_millis(50)).await;
+        
+        // Make multiple concurrent requests
+        let mut handles = Vec::new();
+        
+        for _ in 0..10 {
+            let handle = tokio::spawn(async move {
+                let mut stream = TcpStream::connect(addr).await.unwrap();
+                let request = "GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+                stream.write_all(request.as_bytes()).await.unwrap();
+                
+                let mut response = String::new();
+                stream.read_to_string(&mut response).await.unwrap();
+                
+                // Verify response
+                assert!(response.contains("HTTP/1.1 200 OK"));
+                assert!(response.contains("total_commands"));
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all requests to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        
+        server.shutdown().await.unwrap();
+    }
+}

@@ -7,12 +7,15 @@
 // Core modules
 pub mod config;
 pub mod error;
+pub mod logging;
 
 // Feature modules
 pub mod commands;
 pub mod storage;
 pub mod network;
 pub mod cli;
+pub mod metrics;
+pub mod monitoring;
 
 // Public API exports
 pub use config::Config;
@@ -22,6 +25,8 @@ pub use error::{RustyPotatoError, Result};
 pub use commands::{CommandResult, ResponseValue, CommandRegistry};
 pub use storage::{MemoryStore, StoredValue, ValueType};
 pub use network::TcpServer;
+pub use metrics::{MetricsCollector, MetricsServer};
+pub use monitoring::{HealthChecker, HealthStatus, LogRotationManager, MonitoringServer};
 
 use commands::{SetCommand, GetCommand, DelCommand, ExistsCommand, ExpireCommand, TtlCommand, IncrCommand, DecrCommand};
 use std::sync::Arc;
@@ -31,6 +36,7 @@ pub struct RustyPotatoServer {
     config: Arc<Config>,
     storage: Arc<MemoryStore>,
     command_registry: Arc<CommandRegistry>,
+    metrics: Arc<MetricsCollector>,
     tcp_server: Option<TcpServer>,
 }
 
@@ -39,6 +45,27 @@ impl RustyPotatoServer {
     pub fn new(config: Config) -> Result<Self> {
         let config = Arc::new(config);
         let storage = Arc::new(MemoryStore::new());
+        let metrics = Arc::new(MetricsCollector::new());
+        
+        Self::with_components_internal(config, storage, metrics)
+    }
+    
+    /// Create a new RustyPotato server with shared components
+    pub fn with_components(
+        config: Config,
+        storage: Arc<MemoryStore>,
+        metrics: Arc<MetricsCollector>,
+    ) -> Result<Self> {
+        let config = Arc::new(config);
+        Self::with_components_internal(config, storage, metrics)
+    }
+    
+    /// Internal method to create server with components
+    fn with_components_internal(
+        config: Arc<Config>,
+        storage: Arc<MemoryStore>,
+        metrics: Arc<MetricsCollector>,
+    ) -> Result<Self> {
         
         // Create and populate command registry with all available commands
         let mut command_registry = CommandRegistry::new();
@@ -60,16 +87,18 @@ impl RustyPotatoServer {
         let command_registry = Arc::new(command_registry);
         
         // Create TCP server with all components wired together
-        let tcp_server = TcpServer::new(
+        let tcp_server = TcpServer::with_metrics(
             Arc::clone(&config),
             Arc::clone(&storage),
             Arc::clone(&command_registry),
+            Arc::clone(&metrics),
         );
         
         Ok(Self {
             config,
             storage,
             command_registry,
+            metrics,
             tcp_server: Some(tcp_server),
         })
     }
@@ -82,7 +111,11 @@ impl RustyPotatoServer {
             
             tcp_server.start().await
         } else {
-            Err(RustyPotatoError::InternalError("Server already started or not properly initialized".to_string()))
+            Err(RustyPotatoError::InternalError {
+                message: "Server already started or not properly initialized".to_string(),
+                component: Some("server".to_string()),
+                source: None,
+            })
         }
     }
     
@@ -94,7 +127,11 @@ impl RustyPotatoServer {
             
             tcp_server.start_with_addr().await
         } else {
-            Err(RustyPotatoError::InternalError("Server already started or not properly initialized".to_string()))
+            Err(RustyPotatoError::InternalError {
+                message: "Server already started or not properly initialized".to_string(),
+                component: Some("server".to_string()),
+                source: None,
+            })
         }
     }
     
@@ -120,6 +157,11 @@ impl RustyPotatoServer {
     /// Get a reference to the command registry
     pub fn command_registry(&self) -> &CommandRegistry {
         &self.command_registry
+    }
+
+    /// Get a reference to the metrics collector
+    pub fn metrics(&self) -> &MetricsCollector {
+        &self.metrics
     }
     
     /// Get server statistics

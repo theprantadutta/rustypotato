@@ -5,8 +5,8 @@
 
 use crate::config::{Config, FsyncPolicy};
 use crate::error::{RustyPotatoError, Result};
-use crate::storage::{StoredValue, ValueType};
-use std::path::{Path, PathBuf};
+use crate::storage::ValueType;
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -30,15 +30,19 @@ pub enum AofCommand {
     Expire { key: String, expires_at: u64 },
 }
 
-/// AOF writer for append-only file operations
+/// AOF writer for append-only file operations with batched writes
+#[derive(Debug)]
 pub struct AofWriter {
     file: Option<File>,
     buffer: Vec<u8>,
+    batch_buffer: Vec<AofEntry>,
     flush_interval: Duration,
     fsync_policy: FsyncPolicy,
     file_path: PathBuf,
     last_flush: Instant,
     pending_writes: usize,
+    max_batch_size: usize,
+    max_buffer_size: usize,
 }
 
 impl AofWriter {
@@ -46,12 +50,15 @@ impl AofWriter {
     pub async fn new(config: &Config) -> Result<Self> {
         let mut writer = Self {
             file: None,
-            buffer: Vec::with_capacity(8192), // 8KB initial buffer
+            buffer: Vec::with_capacity(65536), // 64KB initial buffer for batching
+            batch_buffer: Vec::with_capacity(1000), // Batch up to 1000 entries
             flush_interval: Duration::from_secs(1),
             fsync_policy: config.storage.aof_fsync_policy.clone(),
             file_path: config.storage.aof_path.clone(),
             last_flush: Instant::now(),
             pending_writes: 0,
+            max_batch_size: 1000,
+            max_buffer_size: 1024 * 1024, // 1MB max buffer
         };
         
         if config.storage.aof_enabled {
@@ -79,73 +86,121 @@ impl AofWriter {
         Ok(())
     }
     
-    /// Write an AOF entry to the buffer
+    /// Write an AOF entry to the batch buffer
     pub async fn write_entry(&mut self, entry: AofEntry) -> Result<()> {
         if self.file.is_none() {
             return Ok(()); // AOF disabled
         }
         
-        let serialized = self.serialize_entry(&entry)?;
-        self.buffer.extend_from_slice(&serialized);
+        self.batch_buffer.push(entry);
         self.pending_writes += 1;
         
-        // Check if we need to flush based on policy
+        // Check if we need to flush based on batch size or policy
+        let should_flush = match self.fsync_policy {
+            FsyncPolicy::Always => true,
+            FsyncPolicy::EverySecond => {
+                self.batch_buffer.len() >= self.max_batch_size ||
+                self.last_flush.elapsed() >= self.flush_interval
+            }
+            FsyncPolicy::Never => {
+                self.batch_buffer.len() >= self.max_batch_size ||
+                self.buffer.len() > self.max_buffer_size
+            }
+        };
+        
+        if should_flush {
+            self.flush_batch().await?;
+        }
+        
+        Ok(())
+    }
+
+    /// Flush the batch buffer to the main buffer and optionally to disk
+    async fn flush_batch(&mut self) -> Result<()> {
+        if self.batch_buffer.is_empty() {
+            return Ok(());
+        }
+
+        // Serialize all batched entries at once
+        for entry in &self.batch_buffer {
+            let serialized = self.serialize_entry(entry)?;
+            self.buffer.extend_from_slice(&serialized);
+        }
+        
+        self.batch_buffer.clear();
+
+        // Flush to disk based on policy (avoid recursion by calling flush_to_disk directly)
         match self.fsync_policy {
             FsyncPolicy::Always => {
-                self.flush().await?;
+                self.flush_to_disk(true).await?;
             }
             FsyncPolicy::EverySecond => {
                 if self.last_flush.elapsed() >= self.flush_interval {
-                    self.flush().await?;
+                    self.flush_to_disk(true).await?;
+                } else {
+                    // Just write to OS buffer, don't sync
+                    self.flush_to_disk(false).await?;
                 }
             }
             FsyncPolicy::Never => {
-                // Only flush when buffer gets large
-                if self.buffer.len() > 65536 { // 64KB
-                    self.flush_buffer_only().await?;
+                if self.buffer.len() > self.max_buffer_size {
+                    self.flush_to_disk(false).await?;
                 }
             }
         }
         
         Ok(())
     }
-    
-    /// Flush buffer to disk
-    pub async fn flush(&mut self) -> Result<()> {
+
+    /// Internal method to flush buffer to disk with optional sync
+    async fn flush_to_disk(&mut self, sync: bool) -> Result<()> {
         if let Some(ref mut file) = self.file {
             if !self.buffer.is_empty() {
                 file.write_all(&self.buffer).await?;
                 file.flush().await?;
                 
-                // Sync to disk based on policy
-                if matches!(self.fsync_policy, FsyncPolicy::Always | FsyncPolicy::EverySecond) {
+                if sync {
                     file.sync_all().await?;
                 }
                 
                 self.buffer.clear();
                 self.last_flush = Instant::now();
                 
-                debug!("Flushed {} pending writes to AOF", self.pending_writes);
+                debug!("Flushed {} pending writes to AOF (sync: {})", self.pending_writes, sync);
                 self.pending_writes = 0;
             }
         }
         Ok(())
     }
     
+    /// Flush buffer to disk
+    pub async fn flush(&mut self) -> Result<()> {
+        // First serialize any pending batch entries without recursive flush
+        if !self.batch_buffer.is_empty() {
+            for entry in &self.batch_buffer {
+                let serialized = self.serialize_entry(entry)?;
+                self.buffer.extend_from_slice(&serialized);
+            }
+            self.batch_buffer.clear();
+        }
+
+        // Now flush to disk with sync
+        self.flush_to_disk(true).await
+    }
+    
     /// Flush buffer without syncing to disk
     async fn flush_buffer_only(&mut self) -> Result<()> {
-        if let Some(ref mut file) = self.file {
-            if !self.buffer.is_empty() {
-                file.write_all(&self.buffer).await?;
-                file.flush().await?;
-                self.buffer.clear();
-                self.last_flush = Instant::now();
-                
-                debug!("Flushed buffer (no sync) with {} pending writes", self.pending_writes);
-                self.pending_writes = 0;
+        // First serialize any pending batch entries
+        if !self.batch_buffer.is_empty() {
+            for entry in &self.batch_buffer {
+                let serialized = self.serialize_entry(entry)?;
+                self.buffer.extend_from_slice(&serialized);
             }
+            self.batch_buffer.clear();
         }
-        Ok(())
+
+        // Flush to disk without sync
+        self.flush_to_disk(false).await
     }
     
     /// Serialize an AOF entry to bytes
@@ -199,6 +254,7 @@ impl AofWriter {
 }
 
 /// Recovery handler for loading data from AOF
+#[derive(Debug)]
 pub struct RecoveryHandler {
     file_path: PathBuf,
 }
@@ -252,22 +308,28 @@ impl RecoveryHandler {
         let parts: Vec<&str> = line.split_whitespace().collect();
         
         if parts.len() < 2 {
-            return Err(RustyPotatoError::PersistenceError(
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid AOF line format")
-            ));
+            return Err(RustyPotatoError::PersistenceError {
+                message: "Invalid AOF line format".to_string(),
+                source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid AOF line format")),
+                recoverable: false,
+            });
         }
         
         let timestamp = parts[0].parse::<u64>()
-            .map_err(|_| RustyPotatoError::PersistenceError(
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid timestamp")
-            ))?;
+            .map_err(|_| RustyPotatoError::PersistenceError {
+                message: "Invalid timestamp".to_string(),
+                source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid timestamp")),
+                recoverable: false,
+            })?;
             
         let command = match parts[1] {
             "SET" => {
                 if parts.len() < 4 {
-                    return Err(RustyPotatoError::PersistenceError(
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SET command")
-                    ));
+                    return Err(RustyPotatoError::PersistenceError {
+                        message: "Invalid SET command".to_string(),
+                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SET command")),
+                        recoverable: false,
+                    });
                 }
                 let key = parts[2].to_string();
                 let value_str = parts[3..].join(" "); // Handle values with spaces
@@ -276,46 +338,58 @@ impl RecoveryHandler {
             }
             "SETEX" => {
                 if parts.len() < 5 {
-                    return Err(RustyPotatoError::PersistenceError(
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SETEX command")
-                    ));
+                    return Err(RustyPotatoError::PersistenceError {
+                        message: "Invalid SETEX command".to_string(),
+                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SETEX command")),
+                        recoverable: false,
+                    });
                 }
                 let key = parts[2].to_string();
                 let expires_at = parts[3].parse::<u64>()
-                    .map_err(|_| RustyPotatoError::PersistenceError(
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid expiration timestamp")
-                    ))?;
+                    .map_err(|_| RustyPotatoError::PersistenceError {
+                        message: "Invalid expiration timestamp".to_string(),
+                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid expiration timestamp")),
+                        recoverable: false,
+                    })?;
                 let value_str = parts[4..].join(" ");
                 let value = self.parse_value(&value_str);
                 AofCommand::SetWithExpiration { key, value, expires_at }
             }
             "DEL" => {
                 if parts.len() < 3 {
-                    return Err(RustyPotatoError::PersistenceError(
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid DEL command")
-                    ));
+                    return Err(RustyPotatoError::PersistenceError {
+                        message: "Invalid DEL command".to_string(),
+                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid DEL command")),
+                        recoverable: false,
+                    });
                 }
                 let key = parts[2].to_string();
                 AofCommand::Delete { key }
             }
             "EXPIREAT" => {
                 if parts.len() < 4 {
-                    return Err(RustyPotatoError::PersistenceError(
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid EXPIREAT command")
-                    ));
+                    return Err(RustyPotatoError::PersistenceError {
+                        message: "Invalid EXPIREAT command".to_string(),
+                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid EXPIREAT command")),
+                        recoverable: false,
+                    });
                 }
                 let key = parts[2].to_string();
                 let expires_at = parts[3].parse::<u64>()
-                    .map_err(|_| RustyPotatoError::PersistenceError(
-                        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid expiration timestamp")
-                    ))?;
+                    .map_err(|_| RustyPotatoError::PersistenceError {
+                        message: "Invalid expiration timestamp".to_string(),
+                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid expiration timestamp")),
+                        recoverable: false,
+                    })?;
                 AofCommand::Expire { key, expires_at }
             }
             _ => {
-                return Err(RustyPotatoError::PersistenceError(
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, 
-                                       format!("Unknown AOF command: {}", parts[1]))
-                ));
+                return Err(RustyPotatoError::PersistenceError {
+                    message: format!("Unknown AOF command: {}", parts[1]),
+                    source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, 
+                                       format!("Unknown AOF command: {}", parts[1]))),
+                    recoverable: false,
+                });
             }
         };
         
@@ -334,6 +408,7 @@ impl RecoveryHandler {
 }
 
 /// Persistence manager that coordinates AOF writing and recovery
+#[derive(Debug)]
 pub struct PersistenceManager {
     aof_writer: Option<AofWriter>,
     recovery_handler: RecoveryHandler,
@@ -421,9 +496,11 @@ impl PersistenceManager {
             };
             
             sender.send(entry)
-                .map_err(|_| RustyPotatoError::PersistenceError(
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")
-                ))?;
+                .map_err(|_| RustyPotatoError::PersistenceError {
+                    message: "AOF writer channel closed".to_string(),
+                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    recoverable: true,
+                })?;
         }
         Ok(())
     }
@@ -438,9 +515,11 @@ impl PersistenceManager {
             };
             
             sender.send(entry)
-                .map_err(|_| RustyPotatoError::PersistenceError(
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")
-                ))?;
+                .map_err(|_| RustyPotatoError::PersistenceError {
+                    message: "AOF writer channel closed".to_string(),
+                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    recoverable: true,
+                })?;
         }
         Ok(())
     }
@@ -454,9 +533,11 @@ impl PersistenceManager {
             };
             
             sender.send(entry)
-                .map_err(|_| RustyPotatoError::PersistenceError(
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")
-                ))?;
+                .map_err(|_| RustyPotatoError::PersistenceError {
+                    message: "AOF writer channel closed".to_string(),
+                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    recoverable: true,
+                })?;
         }
         Ok(())
     }
@@ -471,9 +552,11 @@ impl PersistenceManager {
             };
             
             sender.send(entry)
-                .map_err(|_| RustyPotatoError::PersistenceError(
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")
-                ))?;
+                .map_err(|_| RustyPotatoError::PersistenceError {
+                    message: "AOF writer channel closed".to_string(),
+                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    recoverable: true,
+                })?;
         }
         Ok(())
     }

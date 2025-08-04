@@ -3,7 +3,6 @@
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
-use std::time::Duration;
 
 /// EXPIRE command implementation
 /// Sets a timeout on a key. After the timeout has expired, the key will automatically be deleted.

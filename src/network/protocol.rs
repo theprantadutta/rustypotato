@@ -94,16 +94,20 @@ impl RespCodec {
                     match element {
                         RespValue::BulkString(Some(s)) => args.push(s),
                         RespValue::SimpleString(s) => args.push(s),
-                        _ => return Err(RustyPotatoError::InvalidCommand(
-                            "Command arguments must be strings".to_string()
-                        )),
+                        _ => return Err(RustyPotatoError::ProtocolError {
+                            message: "Command arguments must be strings".to_string(),
+                            command: None,
+                            source: None,
+                        }),
                     }
                 }
 
                 if args.is_empty() {
-                    return Err(RustyPotatoError::InvalidCommand(
-                        "Empty command array".to_string()
-                    ));
+                    return Err(RustyPotatoError::ProtocolError {
+                        message: "Empty command array".to_string(),
+                        command: None,
+                        source: None,
+                    });
                 }
 
                 let command_name = args.remove(0).to_uppercase();
@@ -115,9 +119,11 @@ impl RespCodec {
                 
                 Ok(Some(parsed_command))
             }
-            Some(_) => Err(RustyPotatoError::InvalidCommand(
-                "Expected array for command".to_string()
-            )),
+            Some(_) => Err(RustyPotatoError::ProtocolError {
+                message: "Expected array for command".to_string(),
+                command: None,
+                source: None,
+            }),
             None => Ok(None), // Need more data
         }
     }
@@ -136,9 +142,11 @@ impl RespCodec {
             b':' => self.parse_integer(cursor),
             b'$' => self.parse_bulk_string(cursor),
             b'*' => self.parse_array(cursor),
-            _ => Err(RustyPotatoError::InvalidCommand(
-                format!("Unknown RESP type: {}", type_byte as char)
-            )),
+            _ => Err(RustyPotatoError::ProtocolError {
+                message: format!("Unknown RESP type: {}", type_byte as char),
+                command: None,
+                source: None,
+            }),
         }
     }
 
@@ -164,9 +172,11 @@ impl RespCodec {
     fn parse_integer(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<RespValue>> {
         if let Some(line) = self.read_line(cursor)? {
             let value = line.parse::<i64>()
-                .map_err(|_| RustyPotatoError::InvalidCommand(
-                    format!("Invalid integer: {}", line)
-                ))?;
+                .map_err(|_| RustyPotatoError::ProtocolError {
+                    message: format!("Invalid integer: {}", line),
+                    command: None,
+                    source: None,
+                })?;
             Ok(Some(RespValue::Integer(value)))
         } else {
             Ok(None)
@@ -177,18 +187,22 @@ impl RespCodec {
     fn parse_bulk_string(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<RespValue>> {
         if let Some(length_str) = self.read_line(cursor)? {
             let length = length_str.parse::<i32>()
-                .map_err(|_| RustyPotatoError::InvalidCommand(
-                    format!("Invalid bulk string length: {}", length_str)
-                ))?;
+                .map_err(|_| RustyPotatoError::ProtocolError {
+                    message: format!("Invalid bulk string length: {}", length_str),
+                    command: None,
+                    source: None,
+                })?;
 
             if length == -1 {
                 return Ok(Some(RespValue::BulkString(None)));
             }
 
             if length < 0 {
-                return Err(RustyPotatoError::InvalidCommand(
-                    format!("Invalid bulk string length: {}", length)
-                ));
+                return Err(RustyPotatoError::ProtocolError {
+                    message: format!("Invalid bulk string length: {}", length),
+                    command: None,
+                    source: None,
+                });
             }
 
             let length = length as usize;
@@ -203,15 +217,19 @@ impl RespCodec {
             
             // Verify \r\n terminator
             if cursor.remaining() < 2 || cursor.get_u8() != b'\r' || cursor.get_u8() != b'\n' {
-                return Err(RustyPotatoError::InvalidCommand(
-                    "Missing \\r\\n terminator for bulk string".to_string()
-                ));
+                return Err(RustyPotatoError::ProtocolError {
+                    message: "Missing \\r\\n terminator for bulk string".to_string(),
+                    command: None,
+                    source: None,
+                });
             }
 
             let string = String::from_utf8(string_data)
-                .map_err(|_| RustyPotatoError::InvalidCommand(
-                    "Invalid UTF-8 in bulk string".to_string()
-                ))?;
+                .map_err(|_| RustyPotatoError::ProtocolError {
+                    message: "Invalid UTF-8 in bulk string".to_string(),
+                    command: None,
+                    source: None,
+                })?;
 
             Ok(Some(RespValue::BulkString(Some(string))))
         } else {
@@ -223,18 +241,22 @@ impl RespCodec {
     fn parse_array(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<RespValue>> {
         if let Some(length_str) = self.read_line(cursor)? {
             let length = length_str.parse::<i32>()
-                .map_err(|_| RustyPotatoError::InvalidCommand(
-                    format!("Invalid array length: {}", length_str)
-                ))?;
+                .map_err(|_| RustyPotatoError::ProtocolError {
+                    message: format!("Invalid array length: {}", length_str),
+                    command: None,
+                    source: None,
+                })?;
 
             if length == -1 {
                 return Ok(Some(RespValue::Array(vec![])));
             }
 
             if length < 0 {
-                return Err(RustyPotatoError::InvalidCommand(
-                    format!("Invalid array length: {}", length)
-                ));
+                return Err(RustyPotatoError::ProtocolError {
+                    message: format!("Invalid array length: {}", length),
+                    command: None,
+                    source: None,
+                });
             }
 
             let length = length as usize;
@@ -266,9 +288,11 @@ impl RespCodec {
                 cursor.set_position((i + 2) as u64);
                 
                 let line = String::from_utf8(line_data.to_vec())
-                    .map_err(|_| RustyPotatoError::InvalidCommand(
-                        "Invalid UTF-8 in line".to_string()
-                    ))?;
+                    .map_err(|_| RustyPotatoError::ProtocolError {
+                        message: "Invalid UTF-8 in line".to_string(),
+                        command: None,
+                        source: None,
+                    })?;
                 
                 return Ok(Some(line));
             }

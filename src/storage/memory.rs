@@ -5,7 +5,7 @@ use std::time::Instant;
 use std::fmt;
 use std::sync::Arc;
 use crate::error::{RustyPotatoError, Result};
-use crate::storage::persistence::{PersistenceManager, AofEntry, AofCommand};
+use crate::storage::persistence::{PersistenceManager, AofCommand};
 
 /// Value types supported by RustyPotato
 #[derive(Debug, Clone, PartialEq)]
@@ -29,7 +29,7 @@ impl ValueType {
             ValueType::Integer(i) => Ok(*i),
             ValueType::String(s) => {
                 s.parse::<i64>()
-                    .map_err(|_| RustyPotatoError::NotAnInteger)
+                    .map_err(|_| RustyPotatoError::NotAnInteger { value: s.clone() })
             }
         }
     }
@@ -93,6 +93,7 @@ pub struct StoredValue {
 }
 
 /// High-performance concurrent in-memory store
+#[derive(Debug)]
 pub struct MemoryStore {
     data: DashMap<String, StoredValue>,
     expiration_index: DashMap<String, Instant>,
@@ -513,7 +514,9 @@ impl MemoryStore {
                     // Try to convert existing value to integer and increment
                     let current_value = entry.get().value.to_integer()?;
                     let new_value = current_value.checked_add(increment)
-                        .ok_or(RustyPotatoError::NotAnInteger)?;
+                        .ok_or(RustyPotatoError::NotAnInteger { 
+                            value: format!("overflow adding {} to {}", increment, current_value) 
+                        })?;
                     
                     // Update the value in place
                     let mut stored_value = entry.get().clone();
@@ -612,7 +615,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use std::sync::Arc;
-    use std::thread;
     
     // Value type tests
     #[test]
@@ -1286,7 +1288,7 @@ mod tests {
         store.set("key1", "not_a_number").await.unwrap();
         let result = store.incr("key1").await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RustyPotatoError::NotAnInteger));
+        assert!(matches!(result.unwrap_err(), RustyPotatoError::NotAnInteger { .. }));
     }
     
     #[tokio::test]
