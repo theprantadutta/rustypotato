@@ -94,8 +94,8 @@ async fn test_server_basic_functionality() {
     let stream_result = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await;
     let mut stream = match stream_result {
         Ok(Ok(stream)) => stream,
-        Ok(Err(e)) => panic!("Failed to connect to server: {}", e),
-        Err(_) => panic!("Timeout connecting to server at {}", addr),
+        Ok(Err(e)) => panic!("Failed to connect to server: {e}"),
+        Err(_) => panic!("Timeout connecting to server at {addr}"),
     };
 
     // Test SET command
@@ -103,10 +103,10 @@ async fn test_server_basic_functionality() {
     match send_command(&mut stream, set_cmd).await {
         Ok(response) => {
             let response_str = String::from_utf8_lossy(&response);
-            println!("SET response: {:?}", response_str);
+            println!("SET response: {response_str:?}");
             assert!(response == b"+OK\r\n" || response_str.contains("OK"));
         }
-        Err(e) => panic!("SET command failed: {}", e),
+        Err(e) => panic!("SET command failed: {e}"),
     }
 
     // Test GET command
@@ -114,10 +114,10 @@ async fn test_server_basic_functionality() {
     match send_command(&mut stream, get_cmd).await {
         Ok(response) => {
             let response_str = String::from_utf8_lossy(&response);
-            println!("GET response: {:?}", response_str);
+            println!("GET response: {response_str:?}");
             assert!(response == b"$5\r\nvalue\r\n" || response_str.contains("value"));
         }
-        Err(e) => panic!("GET command failed: {}", e),
+        Err(e) => panic!("GET command failed: {e}"),
     }
 
     // Cleanup
@@ -159,11 +159,13 @@ async fn test_server_multiple_connections() {
     for (i, stream) in connections.iter_mut().enumerate() {
         let key = format!("key{i}");
         let value = format!("value{i}");
-        let get_cmd = format!("*2\r\n$3\r\nGET\r\n${}\r\n{}\r\n", key.len(), key);
+        let key_len = key.len();
+        let get_cmd = format!("*2\r\n$3\r\nGET\r\n${key_len}\r\n{key}\r\n");
 
         let response = send_command(stream, get_cmd.as_bytes()).await.unwrap();
         let response_str = String::from_utf8_lossy(&response);
-        let expected = format!("${}\r\n{}\r\n", value.len(), value);
+        let value_len = value.len();
+        let expected = format!("${value_len}\r\n{value}\r\n");
         assert!(response == expected.as_bytes() || response_str.contains(&value));
     }
 
@@ -202,10 +204,12 @@ async fn test_server_concurrent_operations() {
             assert!(response == b"+OK\r\n" || response_str.contains("OK"));
 
             // Get the key back
-            let get_cmd = format!("*2\r\n$3\r\nGET\r\n${}\r\n{}\r\n", key.len(), key);
+            let key_len = key.len();
+            let get_cmd = format!("*2\r\n$3\r\nGET\r\n${key_len}\r\n{key}\r\n");
             let response = send_command(&mut stream, get_cmd.as_bytes()).await.unwrap();
             let response_str = String::from_utf8_lossy(&response);
-            let expected = format!("${}\r\n{}\r\n", value.len(), value);
+            let value_len = value.len();
+            let expected = format!("${value_len}\r\n{value}\r\n");
             assert!(response == expected.as_bytes() || response_str.contains(&value));
 
             i
@@ -296,7 +300,8 @@ async fn test_server_connection_persistence() {
     // Verify all keys exist
     for i in 0..5 {
         let key = format!("persistent_key_{i}");
-        let exists_cmd = format!("*2\r\n$6\r\nEXISTS\r\n${}\r\n{}\r\n", key.len(), key);
+        let key_len = key.len();
+        let exists_cmd = format!("*2\r\n$6\r\nEXISTS\r\n${key_len}\r\n{key}\r\n");
 
         let response = send_command(&mut stream, exists_cmd.as_bytes())
             .await
@@ -437,7 +442,8 @@ async fn test_server_large_values() {
 
     let response_str = String::from_utf8_lossy(&response);
     // Check if response contains the expected value (more flexible than exact match)
-    assert!(response_str.contains(&large_value) || response_str.contains(&format!("${}", large_value.len())));
+    let len = large_value.len();
+    assert!(response_str.contains(&large_value) || response_str.contains(&format!("${len}")));
 
     // Cleanup
     drop(stream);
