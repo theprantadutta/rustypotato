@@ -23,14 +23,14 @@ async fn test_config_loading() {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    // Use a lock to ensure this test runs in isolation
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = TEST_LOCK.lock().unwrap();
+    // Use a global lock to ensure all config tests run in isolation
+    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = CONFIG_TEST_LOCK.lock().unwrap();
 
     // Store original environment state and clear any test variables
     let env_vars = [
         "RUSTYPOTATO_SERVER.PORT",
-        "RUSTYPOTATO_SERVER.BIND_ADDRESS",
+        "RUSTYPOTATO_SERVER.BIND_ADDRESS", 
         "RUSTYPOTATO_STORAGE.AOF_ENABLED",
         "RUSTYPOTATO_LOGGING.LEVEL",
     ];
@@ -60,6 +60,27 @@ async fn test_config_loading() {
 
 #[tokio::test]
 async fn test_config_from_file() {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    // Use the same global lock to ensure all config tests run in isolation
+    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = CONFIG_TEST_LOCK.lock().unwrap();
+
+    // Clear any environment variables that might interfere
+    let env_vars = [
+        "RUSTYPOTATO_SERVER.PORT",
+        "RUSTYPOTATO_SERVER.BIND_ADDRESS",
+        "RUSTYPOTATO_STORAGE.AOF_ENABLED",
+        "RUSTYPOTATO_LOGGING.LEVEL",
+    ];
+
+    let mut original_values: HashMap<&str, Option<String>> = HashMap::new();
+    for var in &env_vars {
+        original_values.insert(var, env::var(var).ok());
+        env::remove_var(var);
+    }
+
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("test_config.toml");
 
@@ -87,6 +108,14 @@ level = "debug"
     assert!(!config.storage.aof_enabled);
     assert_eq!(config.storage.memory_limit, Some(1073741824));
     assert_eq!(config.logging.level, "debug");
+
+    // Restore original environment state
+    for var in &env_vars {
+        env::remove_var(var);
+        if let Some(value) = original_values.get(var).unwrap() {
+            env::set_var(var, value);
+        }
+    }
 }
 
 #[tokio::test]
@@ -127,15 +156,16 @@ fn test_config_with_environment_variables() {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    // Use a lock to ensure this test runs in isolation
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = TEST_LOCK.lock().unwrap();
+    // Use the same global lock to ensure all config tests run in isolation
+    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = CONFIG_TEST_LOCK.lock().unwrap();
 
     // Store original environment state
     let env_vars = [
         "RUSTYPOTATO_SERVER.PORT",
         "RUSTYPOTATO_SERVER.BIND_ADDRESS",
         "RUSTYPOTATO_STORAGE.AOF_ENABLED",
+        "RUSTYPOTATO_LOGGING.LEVEL",
     ];
 
     let mut original_values: HashMap<&str, Option<String>> = HashMap::new();

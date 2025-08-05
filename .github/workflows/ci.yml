@@ -53,7 +53,7 @@ jobs:
       run: cargo test --verbose --all-features
     
     - name: Run integration tests
-      run: cargo test --test '*' --verbose
+      run: cargo test --test '*' --verbose -- --test-threads=1
     
     - name: Run benchmarks (check only)
       run: cargo bench --no-run
