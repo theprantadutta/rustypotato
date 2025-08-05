@@ -50,7 +50,7 @@ impl MonitoringServer {
             TcpListener::bind(&addr)
                 .await
                 .map_err(|e| RustyPotatoError::NetworkError {
-                    message: format!("Failed to bind monitoring server to {}: {}", addr, e),
+                    message: format!("Failed to bind monitoring server to {addr}: {e}"),
                     source: Some(Box::new(e)),
                     connection_id: None,
                 })?;
@@ -98,7 +98,7 @@ impl MonitoringServer {
                 .read(&mut buffer)
                 .await
                 .map_err(|e| RustyPotatoError::NetworkError {
-                    message: format!("Failed to read monitoring request: {}", e),
+                    message: format!("Failed to read monitoring request: {e}"),
                     source: Some(Box::new(e)),
                     connection_id: None,
                 })?;
@@ -131,7 +131,7 @@ impl MonitoringServer {
 
         stream.write_all(response.as_bytes()).await.map_err(|e| {
             RustyPotatoError::NetworkError {
-                message: format!("Failed to write monitoring response: {}", e),
+                message: format!("Failed to write monitoring response: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             }
@@ -141,7 +141,7 @@ impl MonitoringServer {
             .flush()
             .await
             .map_err(|e| RustyPotatoError::NetworkError {
-                message: format!("Failed to flush monitoring response: {}", e),
+                message: format!("Failed to flush monitoring response: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             })?;
@@ -247,8 +247,7 @@ impl MonitoringServer {
             }
             Err(e) => {
                 let response_body = format!(
-                    r#"{{"status": "error", "message": "Log rotation failed: {}"}}"#,
-                    e
+                    r#"{{"status": "error", "message": "Log rotation failed: {e}"}}"#
                 );
                 format!(
                     "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -355,8 +354,7 @@ impl MonitoringServer {
         output.push_str("# TYPE rustypotato_commands_total counter\n");
         for (command, count) in &commands.command_counts {
             output.push_str(&format!(
-                "rustypotato_commands_total{{command=\"{}\"}} {}\n",
-                command, count
+                "rustypotato_commands_total{{command=\"{command}\"}} {count}\n"
             ));
         }
 
@@ -366,8 +364,7 @@ impl MonitoringServer {
         output.push_str("# TYPE rustypotato_command_errors_total counter\n");
         for (command, errors) in &commands.command_errors {
             output.push_str(&format!(
-                "rustypotato_command_errors_total{{command=\"{}\"}} {}\n",
-                command, errors
+                "rustypotato_command_errors_total{{command=\"{command}\"}} {errors}\n"
             ));
         }
 
@@ -376,8 +373,7 @@ impl MonitoringServer {
         for command in commands.command_counts.keys() {
             let error_rate = commands.command_error_rate(command);
             output.push_str(&format!(
-                "rustypotato_command_error_rate{{command=\"{}\"}} {}\n",
-                command, error_rate
+                "rustypotato_command_error_rate{{command=\"{command}\"}} {error_rate}\n"
             ));
         }
 

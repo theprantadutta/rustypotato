@@ -96,7 +96,7 @@ impl ExpirationManager {
     /// Shutdown the expiration manager
     pub async fn shutdown(&mut self) -> Result<()> {
         // Send shutdown command
-        if let Err(_) = self.command_sender.send(ExpirationCommand::Shutdown) {
+        if self.command_sender.send(ExpirationCommand::Shutdown).is_err() {
             warn!("Failed to send shutdown command to expiration manager");
         }
 
@@ -105,7 +105,7 @@ impl ExpirationManager {
             if let Err(e) = handle.await {
                 error!("Expiration manager cleanup task failed: {}", e);
                 return Err(RustyPotatoError::InternalError {
-                    message: format!("Expiration manager cleanup task failed: {}", e),
+                    message: format!("Expiration manager cleanup task failed: {e}"),
                     component: Some("expiration_manager".to_string()),
                     source: None,
                 });
@@ -388,10 +388,10 @@ mod tests {
 
         // Set multiple keys with different expiration times
         for i in 0..5 {
-            let key = format!("key{}", i);
+            let key = format!("key{i}");
             let expires_at = now + Duration::from_millis(100 + i * 50);
             store
-                .set_with_expiration(&key, format!("value{}", i), expires_at)
+                .set_with_expiration(&key, format!("value{i}"), expires_at)
                 .await
                 .unwrap();
             manager.add_expiration(key, expires_at).unwrap();
@@ -479,10 +479,10 @@ mod tests {
 
         // Add many keys with various expiration times
         for i in 0..100 {
-            let key = format!("key{}", i);
+            let key = format!("key{i}");
             let expires_at = now + Duration::from_millis(50 + (i % 10) * 10);
             store
-                .set_with_expiration(&key, format!("value{}", i), expires_at)
+                .set_with_expiration(&key, format!("value{i}"), expires_at)
                 .await
                 .unwrap();
             manager.add_expiration(key, expires_at).unwrap();
@@ -582,9 +582,8 @@ mod tests {
         let ttl = store.ttl("test_key").unwrap();
         // TTL should be close to 1 second, but allow for some timing variance
         assert!(
-            ttl >= 0 && ttl <= 1,
-            "Expected TTL between 0 and 1, got {}",
-            ttl
+            (0..=1).contains(&ttl),
+            "Expected TTL between 0 and 1, got {ttl}"
         );
 
         // Try to expire non-existent key

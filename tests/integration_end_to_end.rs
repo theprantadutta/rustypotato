@@ -156,8 +156,8 @@ async fn test_end_to_end_multiple_connections() {
             let mut stream = TcpStream::connect(addr).await.unwrap();
 
             // Each connection sets a unique key
-            let key = format!("concurrent_key_{}", i);
-            let value = format!("concurrent_value_{}", i);
+            let key = format!("concurrent_key_{i}");
+            let value = format!("concurrent_value_{i}");
             let set_cmd = format!(
                 "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
                 key.len(),

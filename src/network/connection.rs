@@ -194,7 +194,7 @@ impl ConnectionPool {
     /// Create a new connection pool with the specified maximum connections
     pub fn new(max_connections: usize) -> Self {
         // Create buffer pool with reasonable defaults
-        let buffer_pool_size = (max_connections / 10).max(10).min(1000);
+        let buffer_pool_size = (max_connections / 10).clamp(10, 1000);
         let buffer_pool = Arc::new(BufferPool::new(buffer_pool_size, 8192));
 
         Self {
@@ -266,7 +266,7 @@ impl ConnectionPool {
             None => {
                 warn!("Attempted to remove non-existent connection: {}", client_id);
                 Err(RustyPotatoError::NetworkError {
-                    message: format!("Connection {} not found in pool", client_id),
+                    message: format!("Connection {client_id} not found in pool"),
                     source: None,
                     connection_id: Some(client_id.to_string()),
                 })

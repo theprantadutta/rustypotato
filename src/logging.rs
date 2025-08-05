@@ -111,7 +111,7 @@ impl LoggingSystem {
             "warn" => Ok(Level::WARN),
             "error" => Ok(Level::ERROR),
             _ => Err(RustyPotatoError::ConfigError {
-                message: format!("Invalid log level: {}", level_str),
+                message: format!("Invalid log level: {level_str}"),
                 config_key: Some("logging.level".to_string()),
                 source: None,
             }),
@@ -148,7 +148,7 @@ impl LoggingSystem {
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 RustyPotatoError::InternalError {
-                    message: format!("Failed to create log directory: {}", e),
+                    message: format!("Failed to create log directory: {e}"),
                     component: Some("logging".to_string()),
                     source: Some(Box::new(e)),
                 }
@@ -160,7 +160,7 @@ impl LoggingSystem {
             .append(true)
             .open(file_path)
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to open log file: {}", e),
+                message: format!("Failed to open log file: {e}"),
                 component: Some("logging".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -221,7 +221,7 @@ impl LoggingSystem {
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 RustyPotatoError::InternalError {
-                    message: format!("Failed to create log directory: {}", e),
+                    message: format!("Failed to create log directory: {e}"),
                     component: Some("logging".to_string()),
                     source: Some(Box::new(e)),
                 }
@@ -233,7 +233,7 @@ impl LoggingSystem {
             .append(true)
             .open(file_path)
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to open log file: {}", e),
+                message: format!("Failed to open log file: {e}"),
                 component: Some("logging".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -291,7 +291,7 @@ impl LoggingSystem {
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 RustyPotatoError::InternalError {
-                    message: format!("Failed to create log directory: {}", e),
+                    message: format!("Failed to create log directory: {e}"),
                     component: Some("logging".to_string()),
                     source: Some(Box::new(e)),
                 }
@@ -303,7 +303,7 @@ impl LoggingSystem {
             .append(true)
             .open(file_path)
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to open log file: {}", e),
+                message: format!("Failed to open log file: {e}"),
                 component: Some("logging".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -361,6 +361,7 @@ impl LoggingSystem {
 
 /// Performance metrics for logging system
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Default)]
 pub struct LoggingMetrics {
     pub total_log_messages: u64,
     pub log_messages_by_level: std::collections::HashMap<String, u64>,
@@ -370,18 +371,6 @@ pub struct LoggingMetrics {
     pub logging_errors: u64,
 }
 
-impl Default for LoggingMetrics {
-    fn default() -> Self {
-        Self {
-            total_log_messages: 0,
-            log_messages_by_level: std::collections::HashMap::new(),
-            log_file_size_bytes: 0,
-            rotated_files_count: 0,
-            last_rotation: None,
-            logging_errors: 0,
-        }
-    }
-}
 
 /// Custom writer that tracks metrics
 #[derive(Debug)]
@@ -446,7 +435,7 @@ pub async fn check_logging_health(config: &Config) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, LoggingConfig};
+    use crate::config::Config;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -555,8 +544,10 @@ mod tests {
 
     #[test]
     fn test_logging_metrics_serialization() {
-        let mut metrics = LoggingMetrics::default();
-        metrics.total_log_messages = 100;
+        let mut metrics = LoggingMetrics {
+            total_log_messages: 100,
+            ..Default::default()
+        };
         metrics.log_messages_by_level.insert("info".to_string(), 80);
         metrics
             .log_messages_by_level

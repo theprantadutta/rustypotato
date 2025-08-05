@@ -109,8 +109,8 @@ async fn test_server_multiple_connections() {
         let mut stream = TcpStream::connect(addr).await.unwrap();
 
         // Each connection sets a different key
-        let key = format!("key{}", i);
-        let value = format!("value{}", i);
+        let key = format!("key{i}");
+        let value = format!("value{i}");
         let set_cmd = format!(
             "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
             key.len(),
@@ -127,8 +127,8 @@ async fn test_server_multiple_connections() {
 
     // Verify all keys were set by reading them back
     for (i, stream) in connections.iter_mut().enumerate() {
-        let key = format!("key{}", i);
-        let value = format!("value{}", i);
+        let key = format!("key{i}");
+        let value = format!("value{i}");
         let get_cmd = format!("*2\r\n$3\r\nGET\r\n${}\r\n{}\r\n", key.len(), key);
 
         let response = send_command(stream, get_cmd.as_bytes()).await.unwrap();
@@ -153,8 +153,8 @@ async fn test_server_concurrent_operations() {
             let mut stream = TcpStream::connect(addr).await.unwrap();
 
             // Set a key
-            let key = format!("concurrent_key_{}", i);
-            let value = format!("concurrent_value_{}", i);
+            let key = format!("concurrent_key_{i}");
+            let value = format!("concurrent_value_{i}");
             let set_cmd = format!(
                 "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
                 key.len(),
@@ -224,8 +224,8 @@ async fn test_server_connection_persistence() {
 
     // Send multiple commands on the same connection
     for i in 0..5 {
-        let key = format!("persistent_key_{}", i);
-        let value = format!("persistent_value_{}", i);
+        let key = format!("persistent_key_{i}");
+        let value = format!("persistent_value_{i}");
         let set_cmd = format!(
             "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
             key.len(),
@@ -240,7 +240,7 @@ async fn test_server_connection_persistence() {
 
     // Verify all keys exist
     for i in 0..5 {
-        let key = format!("persistent_key_{}", i);
+        let key = format!("persistent_key_{i}");
         let exists_cmd = format!("*2\r\n$6\r\nEXISTS\r\n${}\r\n{}\r\n", key.len(), key);
 
         let response = send_command(&mut stream, exists_cmd.as_bytes())

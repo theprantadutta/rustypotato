@@ -215,7 +215,7 @@ async fn test_log_rotation_cleanup() {
 
     // Create multiple rotations
     for i in 0..5 {
-        let content = format!("Log content iteration {}\n", i).repeat(10);
+        let content = format!("Log content iteration {i}\n").repeat(10);
         fs::write(&log_path, &content).await.unwrap();
 
         // Add small delay to ensure different timestamps
@@ -239,8 +239,7 @@ async fn test_log_rotation_cleanup() {
     // Should have at most max_files (2) rotated files
     assert!(
         rotated_count <= 2,
-        "Too many rotated files: {}",
-        rotated_count
+        "Too many rotated files: {rotated_count}"
     );
 }
 
@@ -300,7 +299,7 @@ async fn test_health_check_component_details() {
     let storage_component = health_result.status().components.get("storage").unwrap();
     assert_eq!(storage_component.status, "healthy");
     assert!(storage_component.details.contains_key("test_operation"));
-    assert!(storage_component.response_time_ms >= 0); // Response time can be 0 for very fast operations
+    // Response time should be a valid number (no need to check >= 0 for u64)
 
     // Check metrics component details
     let metrics_component = health_result.status().components.get("metrics").unwrap();

@@ -266,7 +266,7 @@ impl HealthChecker {
                             last_check: chrono::Utc::now().to_rfc3339(),
                             response_time_ms: start_time.elapsed().as_millis() as u64,
                             details,
-                            error: Some(format!("Storage get failed: {}", e)),
+                            error: Some(format!("Storage get failed: {e}")),
                         }
                     }
                 }
@@ -278,7 +278,7 @@ impl HealthChecker {
                     last_check: chrono::Utc::now().to_rfc3339(),
                     response_time_ms: start_time.elapsed().as_millis() as u64,
                     details,
-                    error: Some(format!("Storage set failed: {}", e)),
+                    error: Some(format!("Storage set failed: {e}")),
                 }
             }
         }
@@ -340,7 +340,7 @@ impl HealthChecker {
             );
             details.insert(
                 "memory_usage_percent".to_string(),
-                format!("{:.2}", memory_usage_percent),
+                format!("{memory_usage_percent:.2}"),
             );
 
             if memory_usage_percent > 90.0 {
@@ -450,7 +450,7 @@ impl HealthChecker {
 
         details.insert(
             "connection_rejection_rate_percent".to_string(),
-            format!("{:.2}", rejection_rate),
+            format!("{rejection_rate:.2}"),
         );
 
         let status = if rejection_rate > 50.0 {
@@ -514,7 +514,7 @@ mod tests {
 
         assert_eq!(storage_health.status, "healthy");
         assert!(storage_health.error.is_none());
-        assert!(storage_health.response_time_ms >= 0);
+        // Response time should be reasonable (removed always-true comparison)
         assert!(storage_health.details.contains_key("test_operation"));
     }
 
@@ -597,6 +597,6 @@ mod tests {
 
         let cached_status = cached.unwrap();
         assert!(!cached_status.components.is_empty());
-        assert!(cached_status.uptime_seconds >= 0);
+        // Uptime should be reasonable (removed always-true comparison)
     }
 }

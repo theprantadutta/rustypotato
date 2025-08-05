@@ -80,7 +80,7 @@ mod tests {
 
         // Set multiple keys
         for i in 1..=5 {
-            let cmd = ParsedCommand::parse(&format!("SET key{} value{}", i, i), client_id).unwrap();
+            let cmd = ParsedCommand::parse(&format!("SET key{i} value{i}"), client_id).unwrap();
             let result = registry.execute(&cmd, &store).await;
             assert!(
                 matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK")

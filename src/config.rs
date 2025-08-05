@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 /// Main configuration structure for RustyPotato server
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -70,16 +71,6 @@ pub enum LogFormat {
     Compact,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            storage: StorageConfig::default(),
-            network: NetworkConfig::default(),
-            logging: LoggingConfig::default(),
-        }
-    }
-}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -145,7 +136,7 @@ impl Config {
         // Add configuration file if it exists
         let config_file_path = config_path
             .map(|p| p.as_ref().to_path_buf())
-            .or_else(|| Self::find_config_file())
+            .or_else(Self::find_config_file)
             .unwrap_or_else(|| PathBuf::from("rustypotato.toml"));
 
         if config_file_path.exists() {
@@ -168,7 +159,7 @@ impl Config {
 
         // Build and validate configuration
         let config = builder.build().map_err(|e| RustyPotatoError::ConfigError {
-            message: format!("Failed to build configuration: {}", e),
+            message: format!("Failed to build configuration: {e}"),
             config_key: None,
             source: Some(Box::new(e)),
         })?;
@@ -177,7 +168,7 @@ impl Config {
             config
                 .try_deserialize()
                 .map_err(|e| RustyPotatoError::ConfigError {
-                    message: format!("Failed to parse configuration: {}", e),
+                    message: format!("Failed to parse configuration: {e}"),
                     config_key: None,
                     source: Some(Box::new(e)),
                 })?;
@@ -231,13 +222,13 @@ impl Config {
         let sample_config = Config::default();
         let toml_content =
             toml::to_string_pretty(&sample_config).map_err(|e| RustyPotatoError::ConfigError {
-                message: format!("Failed to serialize sample config: {}", e),
+                message: format!("Failed to serialize sample config: {e}"),
                 config_key: None,
                 source: Some(Box::new(e)),
             })?;
 
         std::fs::write(path.as_ref(), toml_content).map_err(|e| RustyPotatoError::ConfigError {
-            message: format!("Failed to write sample config: {}", e),
+            message: format!("Failed to write sample config: {e}"),
             config_key: None,
             source: Some(Box::new(e)),
         })?;

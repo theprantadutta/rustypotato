@@ -112,16 +112,12 @@ async fn test_complete_component_integration() {
             // Special case for TTL - just check it starts with :
             assert!(
                 response.starts_with(expected_prefix),
-                "Command {} failed: expected prefix {:?}, got {:?}",
-                i,
-                expected_prefix,
-                response
+                "Command {i} failed: expected prefix {expected_prefix:?}, got {response:?}"
             );
         } else {
             assert_eq!(
                 &response, expected_prefix,
-                "Command {} failed: expected {:?}, got {:?}",
-                i, expected_prefix, response
+                "Command {i} failed: expected {expected_prefix:?}, got {response:?}"
             );
         }
     }
@@ -204,7 +200,7 @@ async fn test_performance_requirements() {
     for i in 0..100 {
         // Test with 100 operations
         let start = Instant::now();
-        let key = format!("perf_{}", i);
+        let key = format!("perf_{i}");
         let cmd = format!(
             "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n$5\r\nvalue\r\n",
             key.len(),
@@ -222,7 +218,7 @@ async fn test_performance_requirements() {
                 i,
                 String::from_utf8_lossy(&response)
             );
-            eprintln!("Command was: {}", cmd);
+            eprintln!("Command was: {cmd}");
             panic!("SET response mismatch");
         }
         set_latencies.push(latency);
@@ -264,8 +260,8 @@ async fn test_concurrent_client_scenarios() {
             let mut successful_ops = 0;
 
             for op_id in 0..operations_per_client {
-                let key = format!("client_{}_{}", client_id, op_id);
-                let value = format!("value_{}_{}", client_id, op_id);
+                let key = format!("client_{client_id}_{op_id}");
+                let value = format!("value_{client_id}_{op_id}");
 
                 // SET operation
                 let set_cmd = format!(
@@ -303,8 +299,7 @@ async fn test_concurrent_client_scenarios() {
         let (client_id, ops) = handle.await.expect("Client task failed");
         assert_eq!(
             ops, operations_per_client,
-            "Client {} didn't complete all operations",
-            client_id
+            "Client {client_id} didn't complete all operations"
         );
         total_operations += ops;
     }
@@ -332,8 +327,8 @@ async fn test_persistence_and_recovery() {
 
         // Populate with test data
         for i in 0..100 {
-            let key = format!("persist_key_{}", i);
-            let value = format!("persist_value_{}", i);
+            let key = format!("persist_key_{i}");
+            let value = format!("persist_value_{i}");
             let cmd = format!(
                 "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
                 key.len(),
@@ -349,7 +344,7 @@ async fn test_persistence_and_recovery() {
 
         // Set some keys with TTL
         for i in 0..10 {
-            let key = format!("ttl_key_{}", i);
+            let key = format!("ttl_key_{i}");
             let expire_cmd = format!(
                 "*3\r\n$6\r\nEXPIRE\r\n${}\r\n{}\r\n$4\r\n3600\r\n",
                 key.len(),
@@ -361,7 +356,7 @@ async fn test_persistence_and_recovery() {
         // Verify AOF file was created (give more time for AOF writes)
         tokio::time::sleep(Duration::from_millis(2000)).await; // Allow time for AOF writes
         if !aof_path.exists() {
-            eprintln!("AOF file not found at: {:?}", aof_path);
+            eprintln!("AOF file not found at: {aof_path:?}");
             eprintln!(
                 "Directory contents: {:?}",
                 std::fs::read_dir(aof_path.parent().unwrap())
@@ -396,8 +391,8 @@ async fn test_persistence_and_recovery() {
 
         // Verify data was recovered
         for i in 0..100 {
-            let key = format!("persist_key_{}", i);
-            let expected_value = format!("persist_value_{}", i);
+            let key = format!("persist_key_{i}");
+            let expected_value = format!("persist_value_{i}");
             let get_cmd = format!("*2\r\n$3\r\nGET\r\n${}\r\n{}\r\n", key.len(), key);
             let response = send_command(&mut stream, get_cmd.as_bytes())
                 .await
@@ -406,14 +401,13 @@ async fn test_persistence_and_recovery() {
             assert_eq!(
                 response,
                 expected.as_bytes(),
-                "Key {} not recovered correctly",
-                key
+                "Key {key} not recovered correctly"
             );
         }
 
         // Verify TTL keys still exist (they shouldn't have expired yet)
         for i in 0..10 {
-            let key = format!("ttl_key_{}", i);
+            let key = format!("ttl_key_{i}");
             let ttl_cmd = format!("*2\r\n$3\r\nTTL\r\n${}\r\n{}\r\n", key.len(), key);
             let response = send_command(&mut stream, ttl_cmd.as_bytes())
                 .await
@@ -421,13 +415,11 @@ async fn test_persistence_and_recovery() {
             // Should return a positive number (time remaining)
             assert!(
                 response.starts_with(b":"),
-                "TTL should return integer for key {}",
-                key
+                "TTL should return integer for key {key}"
             );
             assert!(
                 !response.starts_with(b":-"),
-                "TTL should be positive for key {}",
-                key
+                "TTL should be positive for key {key}"
             );
         }
     }
@@ -446,7 +438,7 @@ async fn test_error_handling_edge_cases() {
     let mut stream = TcpStream::connect(addr).await.expect("Failed to connect");
 
     // Test malformed commands
-    let malformed_commands = vec![
+    let malformed_commands = [
         b"*1\r\n$7\r\nUNKNOWN\r\n".as_slice(), // Unknown command
         b"*2\r\n$3\r\nSET\r\n$3\r\nkey\r\n",   // Missing value
         b"*4\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n$5\r\nextra\r\n", // Too many args
@@ -458,15 +450,13 @@ async fn test_error_handling_edge_cases() {
             .expect("Command should not crash server");
         let response_str = String::from_utf8_lossy(&response);
         if !response_str.starts_with("-ERR") {
-            eprintln!("Malformed command {} response: {}", i, response_str);
-            eprintln!("Command bytes: {:?}", cmd);
+            eprintln!("Malformed command {i} response: {response_str}");
+            eprintln!("Command bytes: {cmd:?}");
         }
         // Some protocol errors might cause connection drops, so we'll be more lenient
         assert!(
             response_str.starts_with("-ERR") || response_str.is_empty(),
-            "Malformed command {} should return error or empty (connection drop), got: {}",
-            i,
-            response_str
+            "Malformed command {i} should return error or empty (connection drop), got: {response_str}"
         );
     }
 
@@ -484,8 +474,7 @@ async fn test_error_handling_edge_cases() {
     let response_str = String::from_utf8_lossy(&response);
     assert!(
         response_str.contains("not an integer") || response_str.contains("not a valid integer"),
-        "INCR on string should return type error, got: {}",
-        response_str
+        "INCR on string should return type error, got: {response_str}"
     );
 
     // Test operations on non-existent keys
@@ -557,8 +546,8 @@ async fn test_memory_and_resource_management() {
 
     // Test many small keys
     for i in 0..1000 {
-        let key = format!("small_key_{:04}", i);
-        let value = format!("val_{}", i);
+        let key = format!("small_key_{i:04}");
+        let value = format!("val_{i}");
         let cmd = format!(
             "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
             key.len(),
@@ -574,8 +563,8 @@ async fn test_memory_and_resource_management() {
 
     // Verify all small keys are accessible
     for i in 0..1000 {
-        let key = format!("small_key_{:04}", i);
-        let expected_value = format!("val_{}", i);
+        let key = format!("small_key_{i:04}");
+        let expected_value = format!("val_{i}");
         let get_cmd = format!("*2\r\n$3\r\nGET\r\n${}\r\n{}\r\n", key.len(), key);
         let response = send_command(&mut stream, get_cmd.as_bytes())
             .await
@@ -604,7 +593,7 @@ async fn test_connection_lifecycle() {
             let mut stream = TcpStream::connect(addr).await.expect("Failed to connect");
 
             // Perform operation to ensure connection is active
-            let key = format!("conn_test_{}_{}", round, i);
+            let key = format!("conn_test_{round}_{i}");
             let cmd = format!(
                 "*3\r\n$3\r\nSET\r\n${}\r\n{}\r\n$5\r\nvalue\r\n",
                 key.len(),
@@ -620,7 +609,7 @@ async fn test_connection_lifecycle() {
 
         // Verify all connections work
         for (i, stream) in connections.iter_mut().enumerate() {
-            let key = format!("conn_test_{}_{}", round, i);
+            let key = format!("conn_test_{round}_{i}");
             let get_cmd = format!("*2\r\n$3\r\nGET\r\n${}\r\n{}\r\n", key.len(), key);
             let response = send_command(stream, get_cmd.as_bytes())
                 .await
@@ -651,21 +640,20 @@ async fn test_integration_summary() {
 
     // This test documents the overall integration status
     let mut issues = Vec::new();
-    let mut successes = Vec::new();
-
-    // Document successful integrations
-    successes.push("✅ All core commands (SET, GET, DEL, EXISTS, EXPIRE, TTL, INCR, DECR) working");
-    successes.push("✅ TCP server accepting and handling concurrent connections");
-    successes.push("✅ RESP protocol parsing and response formatting");
-    successes.push("✅ In-memory storage with concurrent access via DashMap");
-    successes.push("✅ TTL and expiration management");
-    successes.push("✅ Atomic integer operations");
-    successes.push("✅ Error handling and graceful error responses");
-    successes.push("✅ AOF persistence and recovery");
-    successes.push("✅ Configuration management");
-    successes.push("✅ Metrics collection and monitoring");
-    successes.push("✅ CLI client with interactive and single-command modes");
-    successes.push("✅ Server lifecycle management with graceful shutdown");
+    let successes = vec![
+        "✅ All core commands (SET, GET, DEL, EXISTS, EXPIRE, TTL, INCR, DECR) working",
+        "✅ TCP server accepting and handling concurrent connections",
+        "✅ RESP protocol parsing and response formatting",
+        "✅ In-memory storage with concurrent access via DashMap",
+        "✅ TTL and expiration management",
+        "✅ Atomic integer operations",
+        "✅ Error handling and graceful error responses",
+        "✅ AOF persistence and recovery",
+        "✅ Configuration management",
+        "✅ Metrics collection and monitoring",
+        "✅ CLI client with interactive and single-command modes",
+        "✅ Server lifecycle management with graceful shutdown",
+    ];
 
     // Document any remaining issues or limitations
     // Note: These would be identified during actual testing

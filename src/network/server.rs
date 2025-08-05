@@ -88,7 +88,7 @@ impl TcpServer {
             TcpListener::bind(&bind_addr)
                 .await
                 .map_err(|e| RustyPotatoError::NetworkError {
-                    message: format!("Failed to bind to {}: {}", bind_addr, e),
+                    message: format!("Failed to bind to {bind_addr}: {e}"),
                     source: Some(Box::new(e)),
                     connection_id: None,
                 })?;
@@ -96,7 +96,7 @@ impl TcpServer {
         let local_addr = listener
             .local_addr()
             .map_err(|e| RustyPotatoError::NetworkError {
-                message: format!("Failed to get local address: {}", e),
+                message: format!("Failed to get local address: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             })?;
@@ -124,7 +124,7 @@ impl TcpServer {
             TcpListener::bind(&bind_addr)
                 .await
                 .map_err(|e| RustyPotatoError::NetworkError {
-                    message: format!("Failed to bind to {}: {}", bind_addr, e),
+                    message: format!("Failed to bind to {bind_addr}: {e}"),
                     source: Some(Box::new(e)),
                     connection_id: None,
                 })?;
@@ -132,7 +132,7 @@ impl TcpServer {
         let local_addr = listener
             .local_addr()
             .map_err(|e| RustyPotatoError::NetworkError {
-                message: format!("Failed to get local address: {}", e),
+                message: format!("Failed to get local address: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             })?;
@@ -359,7 +359,7 @@ impl TcpServer {
 
         if let Err(e) = stream.set_nodelay(config.network.tcp_nodelay) {
             return Err(RustyPotatoError::NetworkError {
-                message: format!("Failed to set TCP_NODELAY: {}", e),
+                message: format!("Failed to set TCP_NODELAY: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             });
@@ -645,7 +645,7 @@ impl TcpServer {
                 codec
                     .encode(&value)
                     .map_err(|e| RustyPotatoError::NetworkError {
-                        message: format!("Failed to encode response: {}", e),
+                        message: format!("Failed to encode response: {e}"),
                         source: Some(Box::new(e)),
                         connection_id: None,
                     })?
@@ -683,7 +683,7 @@ impl TcpServer {
                 {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(RustyPotatoError::NetworkError {
-                        message: format!("Failed to flush stream: {}", e),
+                        message: format!("Failed to flush stream: {e}"),
                         source: Some(Box::new(e)),
                         connection_id: None,
                     }),
@@ -695,7 +695,7 @@ impl TcpServer {
                 }
             }
             Ok(Err(e)) => Err(RustyPotatoError::NetworkError {
-                message: format!("Failed to write response: {}", e),
+                message: format!("Failed to write response: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             }),

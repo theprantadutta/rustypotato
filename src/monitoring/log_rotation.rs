@@ -296,7 +296,7 @@ impl LogRotationManager {
         fs::create_dir_all(&rotation_dir)
             .await
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to create rotation directory: {}", e),
+                message: format!("Failed to create rotation directory: {e}"),
                 component: Some("log_rotation".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -306,14 +306,14 @@ impl LogRotationManager {
             .and_then(|n| n.to_str())
             .unwrap_or("rustypotato.log");
 
-        let rotated_name = format!("{}.{}", log_file_name, timestamp);
+        let rotated_name = format!("{log_file_name}.{timestamp}");
         let rotated_path = rotation_dir.join(&rotated_name);
 
         // Move current log file to rotated name
         fs::rename(log_path, &rotated_path)
             .await
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to rotate log file: {}", e),
+                message: format!("Failed to rotate log file: {e}"),
                 component: Some("log_rotation".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -354,7 +354,7 @@ impl LogRotationManager {
             fs::read(file_path)
                 .await
                 .map_err(|e| RustyPotatoError::InternalError {
-                    message: format!("Failed to read file for compression: {}", e),
+                    message: format!("Failed to read file for compression: {e}"),
                     component: Some("log_rotation".to_string()),
                     source: Some(Box::new(e)),
                 })?;
@@ -366,7 +366,7 @@ impl LogRotationManager {
         encoder
             .write_all(&input_data)
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to compress data: {}", e),
+                message: format!("Failed to compress data: {e}"),
                 component: Some("log_rotation".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -374,7 +374,7 @@ impl LogRotationManager {
         let compressed_data = encoder
             .finish()
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to finish compression: {}", e),
+                message: format!("Failed to finish compression: {e}"),
                 component: Some("log_rotation".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -383,7 +383,7 @@ impl LogRotationManager {
         fs::write(&compressed_path, compressed_data)
             .await
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to write compressed file: {}", e),
+                message: format!("Failed to write compressed file: {e}"),
                 component: Some("log_rotation".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -392,7 +392,7 @@ impl LogRotationManager {
         fs::remove_file(file_path)
             .await
             .map_err(|e| RustyPotatoError::InternalError {
-                message: format!("Failed to remove original file after compression: {}", e),
+                message: format!("Failed to remove original file after compression: {e}"),
                 component: Some("log_rotation".to_string()),
                 source: Some(Box::new(e)),
             })?;
@@ -415,7 +415,7 @@ impl LogRotationManager {
             fs::read_dir(rotation_dir)
                 .await
                 .map_err(|e| RustyPotatoError::InternalError {
-                    message: format!("Failed to read rotation directory: {}", e),
+                    message: format!("Failed to read rotation directory: {e}"),
                     component: Some("log_rotation".to_string()),
                     source: Some(Box::new(e)),
                 })?;
@@ -468,7 +468,7 @@ impl LogRotationManager {
             .unwrap_or("rustypotato.log");
 
         // Check for pattern: logfile.timestamp or logfile.timestamp.gz
-        filename.starts_with(&format!("{}.", log_file_name))
+        filename.starts_with(&format!("{log_file_name}."))
             && (filename.ends_with(".gz")
                 || filename
                     .chars()

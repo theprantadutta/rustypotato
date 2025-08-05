@@ -156,6 +156,12 @@ pub struct PerformanceMetrics {
     pub start_time: Instant,
 }
 
+impl Default for PerformanceMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerformanceMetrics {
     pub fn new() -> Self {
         Self {
@@ -205,6 +211,12 @@ pub struct CommandMetrics {
     pub command_errors: HashMap<String, u64>,
 }
 
+impl Default for CommandMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandMetrics {
     pub fn new() -> Self {
         Self {
@@ -218,7 +230,7 @@ impl CommandMetrics {
         *self.command_counts.entry(command.to_string()).or_insert(0) += 1;
         self.command_latencies
             .entry(command.to_string())
-            .or_insert_with(Histogram::new)
+            .or_default()
             .record(duration);
     }
 
@@ -264,6 +276,12 @@ pub struct NetworkMetrics {
     pub connections_rejected: u64,
     pub connections_closed: u64,
     pub active_connections: u64,
+}
+
+impl Default for NetworkMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NetworkMetrics {
@@ -332,6 +350,12 @@ pub struct StorageMetrics {
     pub memory_operation_latency: Histogram,
     pub cache_hits: u64,
     pub cache_misses: u64,
+}
+
+impl Default for StorageMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StorageMetrics {

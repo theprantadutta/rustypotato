@@ -46,7 +46,7 @@ impl ParsedCommand {
     /// Parse a command string into a ParsedCommand
     /// Supports Redis-style command parsing: "SET key value"
     pub fn parse(input: &str, client_id: Uuid) -> Result<Self, String> {
-        let parts: Vec<&str> = input.trim().split_whitespace().collect();
+        let parts: Vec<&str> = input.split_whitespace().collect();
 
         if parts.is_empty() {
             return Err("Empty command".to_string());
@@ -125,7 +125,7 @@ impl CommandRegistry {
             Some(command) => {
                 // Validate command arity before execution
                 if let Err(err) = cmd.validate_arity(&command.arity()) {
-                    return CommandResult::Error(format!("ERR {}", err));
+                    return CommandResult::Error(format!("ERR {err}"));
                 }
 
                 // Execute the command

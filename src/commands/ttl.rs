@@ -109,8 +109,7 @@ mod tests {
         let ttl = store.ttl("test_key").unwrap();
         assert!(
             ttl > 0 && ttl <= 60,
-            "Expected TTL between 1 and 60, got {}",
-            ttl
+            "Expected TTL between 1 and 60, got {ttl}"
         );
     }
 
@@ -174,7 +173,7 @@ mod tests {
         }
 
         let ttl = store.ttl("test_key").unwrap();
-        assert!(ttl > 2147483640, "Expected large TTL, got {}", ttl);
+        assert!(ttl > 2147483640, "Expected large TTL, got {ttl}");
     }
 
     #[tokio::test]
@@ -257,8 +256,7 @@ mod tests {
         let initial_ttl = store.ttl("test_key").unwrap();
         assert!(
             initial_ttl > 100,
-            "Expected initial TTL > 100, got {}",
-            initial_ttl
+            "Expected initial TTL > 100, got {initial_ttl}"
         );
 
         // Set new expiration
@@ -278,8 +276,7 @@ mod tests {
         let new_ttl = store.ttl("test_key").unwrap();
         assert!(
             new_ttl <= 30 && new_ttl > 0,
-            "Expected new TTL <= 30, got {}",
-            new_ttl
+            "Expected new TTL <= 30, got {new_ttl}"
         );
     }
 
@@ -308,8 +305,7 @@ mod tests {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
                     ttl > 0 && ttl <= 60,
-                    "Expected TTL between 1 and 60, got {}",
-                    ttl
+                    "Expected TTL between 1 and 60, got {ttl}"
                 );
             }
             _ => panic!("Expected integer TTL for key with expiration"),
@@ -441,8 +437,7 @@ mod tests {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
                     ttl > 0 && ttl <= 30,
-                    "Expected TTL between 1 and 30, got {}",
-                    ttl
+                    "Expected TTL between 1 and 30, got {ttl}"
                 );
             }
             _ => panic!("Expected positive TTL after EXPIRE"),
@@ -467,9 +462,8 @@ mod tests {
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
-                    ttl >= 4 && ttl <= 5,
-                    "Expected TTL between 4 and 5, got {}",
-                    ttl
+                    (4..=5).contains(&ttl),
+                    "Expected TTL between 4 and 5, got {ttl}"
                 );
             }
             _ => panic!("Expected TTL between 4 and 5 seconds"),
@@ -482,9 +476,8 @@ mod tests {
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
-                    ttl >= 3 && ttl <= 4,
-                    "Expected TTL between 3 and 4 after 1 second, got {}",
-                    ttl
+                    (3..=4).contains(&ttl),
+                    "Expected TTL between 3 and 4 after 1 second, got {ttl}"
                 );
             }
             _ => panic!("Expected TTL between 3 and 4 seconds after waiting"),
@@ -507,7 +500,7 @@ mod tests {
         let result = ttl_cmd.execute(&ttl_args, &store).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
-                assert!(ttl > 0, "Expected positive TTL, got {}", ttl);
+                assert!(ttl > 0, "Expected positive TTL, got {ttl}");
             }
             _ => panic!("Expected positive TTL"),
         }
@@ -543,7 +536,7 @@ mod tests {
         let result = ttl_cmd.execute(&ttl_args, &store).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
-                assert!(ttl > 0, "Expected positive TTL for empty key, got {}", ttl);
+                assert!(ttl > 0, "Expected positive TTL for empty key, got {ttl}");
             }
             _ => panic!("Expected positive TTL for empty key"),
         }
@@ -569,8 +562,7 @@ mod tests {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
                     ttl > 0 && ttl <= 45,
-                    "Expected TTL between 1 and 45 for unicode key, got {}",
-                    ttl
+                    "Expected TTL between 1 and 45 for unicode key, got {ttl}"
                 );
             }
             _ => panic!("Expected positive TTL for unicode key"),
@@ -587,8 +579,8 @@ mod tests {
 
         // Pre-populate with keys
         for i in 0..10 {
-            let key = format!("key{}", i);
-            store.set(&key, format!("value{}", i)).await.unwrap();
+            let key = format!("key{i}");
+            store.set(&key, format!("value{i}")).await.unwrap();
         }
 
         let mut join_set = JoinSet::new();
@@ -597,7 +589,7 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             join_set.spawn(async move {
-                let key = format!("key{}", i);
+                let key = format!("key{i}");
                 let ttl = 60 + i; // Different TTL for each key
 
                 let expire_cmd = ExpireCommand;
@@ -613,12 +605,10 @@ mod tests {
                     CommandResult::Ok(ResponseValue::Integer(actual_ttl)) => {
                         assert!(
                             actual_ttl > 0,
-                            "Expected positive TTL for key {}, got {}",
-                            key,
-                            actual_ttl
+                            "Expected positive TTL for key {key}, got {actual_ttl}"
                         );
                     }
-                    _ => panic!("Expected positive TTL for key {}", key),
+                    _ => panic!("Expected positive TTL for key {key}"),
                 }
             });
         }
@@ -630,13 +620,11 @@ mod tests {
 
         // Verify all keys have expiration set
         for i in 0..10 {
-            let key = format!("key{}", i);
+            let key = format!("key{i}");
             let ttl = store.ttl(&key).unwrap();
             assert!(
                 ttl > 0,
-                "Expected positive TTL for key {}, got {}",
-                key,
-                ttl
+                "Expected positive TTL for key {key}, got {ttl}"
             );
         }
     }

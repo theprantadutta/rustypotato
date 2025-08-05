@@ -54,15 +54,11 @@ impl ShutdownCoordinator {
         }
 
         // Start monitoring server
-        let monitoring_handle = if let Some(monitoring_server) = self.monitoring_server.take() {
-            Some(tokio::spawn(async move {
+        let monitoring_handle = self.monitoring_server.take().map(|monitoring_server| tokio::spawn(async move {
                 if let Err(e) = monitoring_server.start().await {
                     error!("Monitoring server error: {}", e);
                 }
-            }))
-        } else {
-            None
-        };
+            }));
 
         // Start the main server
         let mut server = self.server.take().unwrap();
@@ -236,7 +232,7 @@ fn validate_environment(config: &Config) -> Result<(), Box<dyn std::error::Error
                 debug!("Successfully validated bind address: {}", bind_addr);
             }
             Err(e) => {
-                return Err(format!("Cannot bind to address {}: {}", bind_addr, e).into());
+                return Err(format!("Cannot bind to address {bind_addr}: {e}").into());
             }
         }
     }
@@ -269,6 +265,7 @@ struct ServerArgs {
     port: Option<u16>,
     bind_address: Option<String>,
     log_level: Option<String>,
+    #[allow(dead_code)]
     daemonize: bool,
     version: bool,
 }
@@ -407,7 +404,7 @@ fn display_startup_info(config: &Config) {
         config
             .storage
             .memory_limit
-            .map_or("unlimited".to_string(), |n| format!("{} bytes", n))
+            .map_or("unlimited".to_string(), |n| format!("{n} bytes"))
     );
     info!("");
     info!("Network Configuration:");
@@ -443,7 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?
     } else {
         Config::load().map_err(|e| {
-            eprintln!("Failed to load configuration: {}", e);
+            eprintln!("Failed to load configuration: {e}");
             e
         })?
     };

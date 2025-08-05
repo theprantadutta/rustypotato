@@ -70,30 +70,30 @@ async fn test_cli_client_disconnect_without_connection() {
 
 #[tokio::test]
 async fn test_response_formatting() {
-    let client = create_test_client();
+    let _client = create_test_client();
 
     // Test simple string
     let response = ResponseValue::SimpleString("OK".to_string());
-    assert_eq!(client.format_response(&response), "OK");
+    assert_eq!(CliClient::format_response(&response), "OK");
 
     // Test bulk string
     let response = ResponseValue::BulkString(Some("hello".to_string()));
-    assert_eq!(client.format_response(&response), "hello");
+    assert_eq!(CliClient::format_response(&response), "hello");
 
     // Test nil
     let response = ResponseValue::BulkString(None);
-    assert_eq!(client.format_response(&response), "(nil)");
+    assert_eq!(CliClient::format_response(&response), "(nil)");
 
     let response = ResponseValue::Nil;
-    assert_eq!(client.format_response(&response), "(nil)");
+    assert_eq!(CliClient::format_response(&response), "(nil)");
 
     // Test integer
     let response = ResponseValue::Integer(42);
-    assert_eq!(client.format_response(&response), "(integer) 42");
+    assert_eq!(CliClient::format_response(&response), "(integer) 42");
 
     // Test empty array
     let response = ResponseValue::Array(vec![]);
-    assert_eq!(client.format_response(&response), "(empty array)");
+    assert_eq!(CliClient::format_response(&response), "(empty array)");
 
     // Test array with elements
     let response = ResponseValue::Array(vec![
@@ -101,7 +101,7 @@ async fn test_response_formatting() {
         ResponseValue::Integer(2),
         ResponseValue::BulkString(Some("third".to_string())),
     ]);
-    let formatted = client.format_response(&response);
+    let formatted = CliClient::format_response(&response);
     assert!(formatted.contains("1) first"));
     assert!(formatted.contains("2) (integer) 2"));
     assert!(formatted.contains("3) third"));
@@ -515,8 +515,8 @@ mod performance_tests {
         let num_operations = 1000;
 
         for i in 0..num_operations {
-            let key = format!("perf_key_{}", i);
-            let value = format!("perf_value_{}", i);
+            let key = format!("perf_key_{i}");
+            let value = format!("perf_value_{i}");
 
             client
                 .execute_command("SET", &[key.clone(), value])
@@ -539,8 +539,7 @@ mod performance_tests {
         // Should be able to perform at least 100 ops/sec
         assert!(
             ops_per_sec > 100.0,
-            "Performance too low: {:.2} ops/sec",
-            ops_per_sec
+            "Performance too low: {ops_per_sec:.2} ops/sec"
         );
 
         client.disconnect().await.unwrap();

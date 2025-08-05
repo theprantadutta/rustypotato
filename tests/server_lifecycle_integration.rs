@@ -135,15 +135,14 @@ async fn test_server_multiple_connections() {
     let mut handles = Vec::new();
 
     for i in 0..num_connections {
-        let addr = addr;
         let handle = tokio::spawn(async move {
             let mut stream = TcpStream::connect(addr)
                 .await
                 .expect("Failed to connect to server");
 
             // Each connection sets and gets a unique key
-            let key = format!("key{}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i}");
+            let value = format!("value{i}");
 
             // SET command
             let set_cmd = format!(
@@ -358,7 +357,7 @@ async fn test_server_connection_limits() {
     for i in 0..5 {
         let stream = TcpStream::connect(addr)
             .await
-            .expect(&format!("Failed to connect #{}", i));
+            .unwrap_or_else(|_| panic!("Failed to connect #{i}"));
         connections.push(stream);
         debug!("Created connection #{}", i);
     }
@@ -369,15 +368,12 @@ async fn test_server_connection_limits() {
         Ok(Ok(mut stream)) => {
             // Connection was accepted, but server should send error and close
             let mut buffer = vec![0u8; 1024];
-            if let Ok(n) = timeout(Duration::from_secs(1), stream.read(&mut buffer)).await {
-                if let Ok(n) = n {
-                    let response = String::from_utf8_lossy(&buffer[..n]);
-                    assert!(
-                        response.contains("connection limit"),
-                        "Expected connection limit error, got: {}",
-                        response
-                    );
-                }
+            if let Ok(Ok(n)) = timeout(Duration::from_secs(1), stream.read(&mut buffer)).await {
+                let response = String::from_utf8_lossy(&buffer[..n]);
+                assert!(
+                    response.contains("connection limit"),
+                    "Expected connection limit error, got: {response}"
+                );
             }
         }
         Ok(Err(_)) => {
@@ -440,8 +436,7 @@ async fn test_server_graceful_shutdown() {
     // Verify shutdown was reasonably fast (should be under 5 seconds for test)
     assert!(
         shutdown_duration < Duration::from_secs(5),
-        "Shutdown took too long: {:?}",
-        shutdown_duration
+        "Shutdown took too long: {shutdown_duration:?}"
     );
 
     // Verify connection is closed
@@ -528,8 +523,7 @@ async fn test_server_binary_startup() {
     let config_path = temp_dir.path().join("test_config.toml");
 
     // Create a test configuration file
-    let config_content = format!(
-        r#"
+    let config_content = r#"
 [server]
 port = 0
 bind_address = "127.0.0.1"
@@ -547,8 +541,7 @@ write_timeout = 30
 [logging]
 level = "info"
 format = "Pretty"
-"#
-    );
+"#.to_string();
 
     std::fs::write(&config_path, config_content).expect("Failed to write config file");
 
@@ -560,7 +553,7 @@ format = "Pretty"
 
     // Build the server binary first
     let build_output = Command::new("cargo")
-        .args(&["build", "--bin", "rustypotato-server"])
+        .args(["build", "--bin", "rustypotato-server"])
         .output()
         .expect("Failed to build server binary");
 

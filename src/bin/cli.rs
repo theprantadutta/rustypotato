@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut interactive = InteractiveMode::new(cli.address);
             if let Err(e) = interactive.start().await {
                 error!("Interactive mode failed: {}", e);
-                eprintln!("Interactive mode failed: {}", e);
+                eprintln!("Interactive mode failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -62,18 +62,18 @@ async fn execute_single_command(
 
     // Connect to server
     if let Err(e) = client.connect().await {
-        eprintln!("Failed to connect to server at {}: {}", address, e);
+        eprintln!("Failed to connect to server at {address}: {e}");
         std::process::exit(1);
     }
 
     // Execute command
     match client.execute_command(command, args).await {
         Ok(response) => {
-            let formatted = client.format_response(&response);
-            println!("{}", formatted);
+            let formatted = CliClient::format_response(&response);
+            println!("{formatted}");
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             std::process::exit(1);
         }
     }

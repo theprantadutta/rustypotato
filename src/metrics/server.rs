@@ -154,8 +154,7 @@ impl MetricsServer {
         output.push_str("# TYPE rustypotato_commands_total counter\n");
         for (command, count) in &commands.command_counts {
             output.push_str(&format!(
-                "rustypotato_commands_total{{command=\"{}\"}} {}\n",
-                command, count
+                "rustypotato_commands_total{{command=\"{command}\"}} {count}\n"
             ));
         }
 
@@ -165,8 +164,7 @@ impl MetricsServer {
         output.push_str("# TYPE rustypotato_command_errors_total counter\n");
         for (command, errors) in &commands.command_errors {
             output.push_str(&format!(
-                "rustypotato_command_errors_total{{command=\"{}\"}} {}\n",
-                command, errors
+                "rustypotato_command_errors_total{{command=\"{command}\"}} {errors}\n"
             ));
         }
 
@@ -292,7 +290,7 @@ impl MetricsServer {
             summary.total_commands,
             summary
                 .most_frequent_command
-                .map(|(cmd, count)| format!("\"{}({}times)\"", cmd, count))
+                .map(|(cmd, count)| format!("\"{cmd}({count}times)\""))
                 .unwrap_or_else(|| "null".to_string()),
             summary.total_bytes_read,
             summary.total_bytes_written,

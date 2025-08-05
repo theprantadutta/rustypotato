@@ -99,7 +99,7 @@ impl CliClient {
         if let Err(e) = stream.write_all(&encoded_command).await {
             error!("Failed to send command: {}", e);
             return Err(RustyPotatoError::NetworkError {
-                message: format!("Failed to send command: {}", e),
+                message: format!("Failed to send command: {e}"),
                 source: Some(Box::new(e)),
                 connection_id: None,
             });
@@ -122,7 +122,7 @@ impl CliClient {
         self.codec
             .encode(&response_value)
             .map_err(|e| RustyPotatoError::ProtocolError {
-                message: format!("Failed to encode command: {}", e),
+                message: format!("Failed to encode command: {e}"),
                 command: Some(parts.join(" ")),
                 source: Some(Box::new(e)),
             })
@@ -149,7 +149,7 @@ impl CliClient {
                     Err(e) => {
                         error!("Failed to read response: {}", e);
                         return Err(RustyPotatoError::NetworkError {
-                            message: format!("Failed to read response: {}", e),
+                            message: format!("Failed to read response: {e}"),
                             source: Some(Box::new(e)),
                             connection_id: None,
                         });
@@ -186,7 +186,7 @@ impl CliClient {
         let mut cursor = std::io::Cursor::new(buffer);
 
         match self.parse_resp_value(&mut cursor)? {
-            Some(resp_value) => Ok(Some(self.convert_resp_to_response(resp_value))),
+            Some(resp_value) => Ok(Some(Self::convert_resp_to_response(resp_value))),
             None => Ok(None),
         }
     }
@@ -254,7 +254,7 @@ impl CliClient {
             let value = line
                 .parse::<i64>()
                 .map_err(|_| RustyPotatoError::ProtocolError {
-                    message: format!("Invalid integer: {}", line),
+                    message: format!("Invalid integer: {line}"),
                     command: None,
                     source: None,
                 })?;
@@ -274,7 +274,7 @@ impl CliClient {
                 length_str
                     .parse::<i32>()
                     .map_err(|_| RustyPotatoError::ProtocolError {
-                        message: format!("Invalid bulk string length: {}", length_str),
+                        message: format!("Invalid bulk string length: {length_str}"),
                         command: None,
                         source: None,
                     })?;
@@ -285,7 +285,7 @@ impl CliClient {
 
             if length < 0 {
                 return Err(RustyPotatoError::ProtocolError {
-                    message: format!("Invalid bulk string length: {}", length),
+                    message: format!("Invalid bulk string length: {length}"),
                     command: None,
                     source: None,
                 });
@@ -351,7 +351,7 @@ impl CliClient {
                 length_str
                     .parse::<i32>()
                     .map_err(|_| RustyPotatoError::ProtocolError {
-                        message: format!("Invalid array length: {}", length_str),
+                        message: format!("Invalid array length: {length_str}"),
                         command: None,
                         source: None,
                     })?;
@@ -362,7 +362,7 @@ impl CliClient {
 
             if length < 0 {
                 return Err(RustyPotatoError::ProtocolError {
-                    message: format!("Invalid array length: {}", length),
+                    message: format!("Invalid array length: {length}"),
                     command: None,
                     source: None,
                 });
@@ -413,7 +413,6 @@ impl CliClient {
 
     /// Convert RespValue to ResponseValue
     fn convert_resp_to_response(
-        &self,
         resp_value: crate::network::protocol::RespValue,
     ) -> ResponseValue {
         match resp_value {
@@ -423,24 +422,24 @@ impl CliClient {
             crate::network::protocol::RespValue::Array(arr) => {
                 let converted_arr: Vec<ResponseValue> = arr
                     .into_iter()
-                    .map(|item| self.convert_resp_to_response(item))
+                    .map(Self::convert_resp_to_response)
                     .collect();
                 ResponseValue::Array(converted_arr)
             }
             crate::network::protocol::RespValue::Error(msg) => {
                 // Convert error to a simple string for display
-                ResponseValue::SimpleString(format!("ERR {}", msg))
+                ResponseValue::SimpleString(format!("ERR {msg}"))
             }
         }
     }
 
     /// Format response for display
-    pub fn format_response(&self, response: &ResponseValue) -> String {
+    pub fn format_response(response: &ResponseValue) -> String {
         match response {
             ResponseValue::SimpleString(s) => s.clone(),
             ResponseValue::BulkString(Some(s)) => s.clone(),
             ResponseValue::BulkString(None) | ResponseValue::Nil => "(nil)".to_string(),
-            ResponseValue::Integer(i) => format!("(integer) {}", i),
+            ResponseValue::Integer(i) => format!("(integer) {i}"),
             ResponseValue::Array(arr) => {
                 if arr.is_empty() {
                     "(empty array)".to_string()
@@ -448,7 +447,7 @@ impl CliClient {
                     let formatted_items: Vec<String> = arr
                         .iter()
                         .enumerate()
-                        .map(|(i, item)| format!("{}) {}", i + 1, self.format_response(item)))
+                        .map(|(i, item)| format!("{}) {}", i + 1, Self::format_response(item)))
                         .collect();
                     formatted_items.join("\n")
                 }

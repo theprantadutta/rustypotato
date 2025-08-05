@@ -16,7 +16,7 @@ pub enum ValueType {
 
 impl ValueType {
     /// Convert value to string representation
-    pub fn to_string(&self) -> String {
+    pub fn as_string(&self) -> String {
         match self {
             ValueType::String(s) => s.clone(),
             ValueType::Integer(i) => i.to_string(),
@@ -54,7 +54,7 @@ impl ValueType {
 
 impl fmt::Display for ValueType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.as_string())
     }
 }
 
@@ -533,7 +533,7 @@ impl MemoryStore {
                     let current_value = entry.get().value.to_integer()?;
                     let new_value = current_value.checked_add(increment).ok_or(
                         RustyPotatoError::NotAnInteger {
-                            value: format!("overflow adding {} to {}", increment, current_value),
+                            value: format!("overflow adding {increment} to {current_value}"),
                         },
                     )?;
 
@@ -632,6 +632,111 @@ impl Default for MemoryStore {
     }
 }
 
+impl StoredValue {
+    /// Create a new stored value
+    pub fn new(value: ValueType) -> Self {
+        let now = Instant::now();
+        Self {
+            value,
+            created_at: now,
+            last_accessed: now,
+            expires_at: None,
+        }
+    }
+
+    /// Create a new stored value with expiration
+    pub fn new_with_expiration(value: ValueType, expires_at: Instant) -> Self {
+        let now = Instant::now();
+        Self {
+            value,
+            created_at: now,
+            last_accessed: now,
+            expires_at: Some(expires_at),
+        }
+    }
+
+    /// Create a new stored value with TTL in seconds
+    pub fn new_with_ttl(value: ValueType, ttl_seconds: u64) -> Self {
+        let now = Instant::now();
+        let expires_at = now + std::time::Duration::from_secs(ttl_seconds);
+        Self {
+            value,
+            created_at: now,
+            last_accessed: now,
+            expires_at: Some(expires_at),
+        }
+    }
+
+    /// Check if the value has expired
+    pub fn is_expired(&self) -> bool {
+        self.expires_at
+            .is_some_and(|expires| Instant::now() > expires)
+    }
+
+    /// Update last accessed time
+    pub fn touch(&mut self) {
+        self.last_accessed = Instant::now();
+    }
+
+    /// Set expiration time
+    pub fn set_expiration(&mut self, expires_at: Instant) {
+        self.expires_at = Some(expires_at);
+    }
+
+    /// Set TTL in seconds
+    pub fn set_ttl(&mut self, ttl_seconds: u64) {
+        let expires_at = Instant::now() + std::time::Duration::from_secs(ttl_seconds);
+        self.expires_at = Some(expires_at);
+    }
+
+    /// Remove expiration
+    pub fn remove_expiration(&mut self) {
+        self.expires_at = None;
+    }
+
+    /// Get remaining TTL in seconds, returns None if no expiration set
+    pub fn ttl_seconds(&self) -> Option<i64> {
+        self.expires_at.map(|expires| {
+            let now = Instant::now();
+            if expires > now {
+                (expires - now).as_secs() as i64
+            } else {
+                -2 // Expired
+            }
+        })
+    }
+
+    /// Get age of the value in seconds
+    pub fn age_seconds(&self) -> u64 {
+        self.created_at.elapsed().as_secs()
+    }
+
+    /// Get time since last access in seconds
+    pub fn idle_time_seconds(&self) -> u64 {
+        self.last_accessed.elapsed().as_secs()
+    }
+
+    /// Get the value as a string
+    pub fn as_string(&self) -> String {
+        self.value.as_string()
+    }
+
+    /// Try to get the value as an integer
+    pub fn as_integer(&self) -> Result<i64> {
+        self.value.to_integer()
+    }
+
+    /// Get the value type
+    pub fn value_type(&self) -> &ValueType {
+        &self.value
+    }
+
+    /// Get the type name
+    pub fn type_name(&self) -> &'static str {
+        self.value.type_name()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,7 +749,7 @@ mod tests {
         let value = ValueType::String("hello".to_string());
         assert!(value.is_string());
         assert!(!value.is_integer());
-        assert_eq!(value.to_string(), "hello");
+        assert_eq!(value.as_string(), "hello");
         assert_eq!(value.type_name(), "string");
     }
 
@@ -653,7 +758,7 @@ mod tests {
         let value = ValueType::Integer(42);
         assert!(!value.is_string());
         assert!(value.is_integer());
-        assert_eq!(value.to_string(), "42");
+        assert_eq!(value.as_string(), "42");
         assert_eq!(value.type_name(), "integer");
     }
 
@@ -690,10 +795,10 @@ mod tests {
     #[test]
     fn test_value_type_display() {
         let string_value = ValueType::String("hello".to_string());
-        assert_eq!(format!("{}", string_value), "hello");
+        assert_eq!(format!("{string_value}"), "hello");
 
         let int_value = ValueType::Integer(42);
-        assert_eq!(format!("{}", int_value), "42");
+        assert_eq!(format!("{int_value}"), "42");
     }
 
     // StoredValue tests
@@ -735,7 +840,7 @@ mod tests {
 
         // TTL should be approximately 60 seconds
         let ttl = stored.ttl_seconds().unwrap();
-        assert!(ttl >= 59 && ttl <= 60);
+        assert!((59..=60).contains(&ttl));
     }
 
     #[test]
@@ -865,7 +970,7 @@ mod tests {
 
         // Check TTL
         let ttl = store.ttl("key1").unwrap();
-        assert!(ttl >= 59 && ttl <= 60);
+        assert!((59..=60).contains(&ttl));
 
         // Set expiration on existing key
         store.set("key2", "value2").await.unwrap();
@@ -873,7 +978,7 @@ mod tests {
         assert!(expired);
 
         let ttl2 = store.ttl("key2").unwrap();
-        assert!(ttl2 >= 29 && ttl2 <= 30);
+        assert!((29..=30).contains(&ttl2));
 
         // Try to expire non-existent key
         let not_expired = store.expire("nonexistent", 30).await.unwrap();
@@ -1016,8 +1121,8 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             let handle = tokio::spawn(async move {
-                let key = format!("key{}", i);
-                let value = format!("value{}", i);
+                let key = format!("key{i}");
+                let value = format!("value{i}");
 
                 // Set value
                 store_clone.set(&key, value.as_str()).await.unwrap();
@@ -1037,8 +1142,8 @@ mod tests {
         // Verify all values are present
         assert_eq!(store.len(), 10);
         for i in 0..10 {
-            let key = format!("key{}", i);
-            let expected_value = format!("value{}", i);
+            let key = format!("key{i}");
+            let expected_value = format!("value{i}");
             let retrieved = store.get(&key).unwrap().unwrap();
             assert_eq!(retrieved.value.to_string(), expected_value);
         }
@@ -1053,7 +1158,7 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             let handle = tokio::spawn(async move {
-                let value = format!("value{}", i);
+                let value = format!("value{i}");
 
                 // Set value (last one wins)
                 store_clone.set("shared_key", value.as_str()).await.unwrap();
@@ -1080,8 +1185,8 @@ mod tests {
 
         // Pre-populate with data
         for i in 0..20 {
-            let key = format!("key{}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i}");
+            let value = format!("value{i}");
             store.set(&key, value.as_str()).await.unwrap();
         }
 
@@ -1093,7 +1198,7 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             let handle = tokio::spawn(async move {
-                let key = format!("key{}", i);
+                let key = format!("key{i}");
                 store_clone.delete(&key).await.unwrap();
             });
             handles.push(handle);
@@ -1109,12 +1214,12 @@ mod tests {
 
         // Verify which keys remain
         for i in 0..20 {
-            let key = format!("key{}", i);
+            let key = format!("key{i}");
             let exists = store.exists(&key).unwrap();
             if i < 10 {
-                assert!(!exists, "Key {} should have been deleted", key);
+                assert!(!exists, "Key {key} should have been deleted");
             } else {
-                assert!(exists, "Key {} should still exist", key);
+                assert!(exists, "Key {key} should still exist");
             }
         }
     }
@@ -1126,8 +1231,8 @@ mod tests {
 
         // Pre-populate with data
         for i in 0..10 {
-            let key = format!("key{}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i}");
+            let value = format!("value{i}");
             store.set(&key, value.as_str()).await.unwrap();
         }
 
@@ -1135,7 +1240,7 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             let handle = tokio::spawn(async move {
-                let key = format!("key{}", i);
+                let key = format!("key{i}");
                 let ttl = 60 + i as u64; // Different TTL for each key
                 let _expired = store_clone.expire(&key, ttl).await.unwrap();
             });
@@ -1149,9 +1254,9 @@ mod tests {
 
         // Verify all keys have expiration set
         for i in 0..10 {
-            let key = format!("key{}", i);
+            let key = format!("key{i}");
             let ttl = store.ttl(&key).unwrap();
-            assert!(ttl > 0, "Key {} should have positive TTL", key);
+            assert!(ttl > 0, "Key {key} should have positive TTL");
         }
     }
 
@@ -1169,7 +1274,7 @@ mod tests {
                 match i % 4 {
                     0 => {
                         // Set operation
-                        let value = format!("value{}", i);
+                        let value = format!("value{i}");
                         store_clone.set(&key, value.as_str()).await.unwrap();
                     }
                     1 => {
@@ -1209,8 +1314,8 @@ mod tests {
 
         // Set values with very short TTL
         for i in 0..20 {
-            let key = format!("key{}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i}");
+            let value = format!("value{i}");
             let expires_at = Instant::now() + Duration::from_millis(1);
             store
                 .set_with_expiration(&key, value.as_str(), expires_at)
@@ -1338,110 +1443,5 @@ mod tests {
 
         let stored = store.get("new_key").unwrap().unwrap();
         assert_eq!(stored.value.to_integer().unwrap(), -1);
-    }
-}
-
-impl StoredValue {
-    /// Create a new stored value
-    pub fn new(value: ValueType) -> Self {
-        let now = Instant::now();
-        Self {
-            value,
-            created_at: now,
-            last_accessed: now,
-            expires_at: None,
-        }
-    }
-
-    /// Create a new stored value with expiration
-    pub fn new_with_expiration(value: ValueType, expires_at: Instant) -> Self {
-        let now = Instant::now();
-        Self {
-            value,
-            created_at: now,
-            last_accessed: now,
-            expires_at: Some(expires_at),
-        }
-    }
-
-    /// Create a new stored value with TTL in seconds
-    pub fn new_with_ttl(value: ValueType, ttl_seconds: u64) -> Self {
-        let now = Instant::now();
-        let expires_at = now + std::time::Duration::from_secs(ttl_seconds);
-        Self {
-            value,
-            created_at: now,
-            last_accessed: now,
-            expires_at: Some(expires_at),
-        }
-    }
-
-    /// Check if the value has expired
-    pub fn is_expired(&self) -> bool {
-        self.expires_at
-            .map_or(false, |expires| Instant::now() > expires)
-    }
-
-    /// Update last accessed time
-    pub fn touch(&mut self) {
-        self.last_accessed = Instant::now();
-    }
-
-    /// Set expiration time
-    pub fn set_expiration(&mut self, expires_at: Instant) {
-        self.expires_at = Some(expires_at);
-    }
-
-    /// Set TTL in seconds
-    pub fn set_ttl(&mut self, ttl_seconds: u64) {
-        let expires_at = Instant::now() + std::time::Duration::from_secs(ttl_seconds);
-        self.expires_at = Some(expires_at);
-    }
-
-    /// Remove expiration
-    pub fn remove_expiration(&mut self) {
-        self.expires_at = None;
-    }
-
-    /// Get remaining TTL in seconds, returns None if no expiration set
-    pub fn ttl_seconds(&self) -> Option<i64> {
-        self.expires_at.map(|expires| {
-            let now = Instant::now();
-            if expires > now {
-                (expires - now).as_secs() as i64
-            } else {
-                -2 // Expired
-            }
-        })
-    }
-
-    /// Get age of the value in seconds
-    pub fn age_seconds(&self) -> u64 {
-        self.created_at.elapsed().as_secs()
-    }
-
-    /// Get time since last access in seconds
-    pub fn idle_time_seconds(&self) -> u64 {
-        self.last_accessed.elapsed().as_secs()
-    }
-
-    /// Get the value as a string
-    pub fn as_string(&self) -> String {
-        self.value.to_string()
-    }
-
-    /// Try to get the value as an integer
-    pub fn as_integer(&self) -> Result<i64> {
-        self.value.to_integer()
-    }
-
-    /// Get the value type
-    pub fn value_type(&self) -> &ValueType {
-        &self.value
-    }
-
-    /// Get the type name
-    pub fn type_name(&self) -> &'static str {
-        self.value.type_name()
     }
 }

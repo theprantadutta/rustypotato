@@ -47,11 +47,11 @@ pub mod generators {
     use rustypotato::ValueType;
 
     pub fn test_key(prefix: &str, id: usize) -> String {
-        format!("{}_{:06}", prefix, id)
+        format!("{prefix}_{id:06}")
     }
 
     pub fn test_value(prefix: &str, id: usize) -> String {
-        format!("{}_{:06}", prefix, id)
+        format!("{prefix}_{id:06}")
     }
 
     pub fn large_value(size: usize) -> String {
@@ -76,27 +76,18 @@ pub mod assertions {
     use std::time::Duration;
 
     pub fn assert_duration_within(actual: Duration, expected: Duration, tolerance: Duration) {
-        let diff = if actual > expected {
-            actual - expected
-        } else {
-            expected - actual
-        };
+        let diff = actual.abs_diff(expected);
 
         assert!(
             diff <= tolerance,
-            "Duration {:?} not within {:?} of expected {:?}",
-            actual,
-            tolerance,
-            expected
+            "Duration {actual:?} not within {tolerance:?} of expected {expected:?}"
         );
     }
 
     pub fn assert_performance_threshold(ops_per_sec: u64, min_threshold: u64) {
         assert!(
             ops_per_sec >= min_threshold,
-            "Performance below threshold: {} ops/sec < {} ops/sec",
-            ops_per_sec,
-            min_threshold
+            "Performance below threshold: {ops_per_sec} ops/sec < {min_threshold} ops/sec"
         );
     }
 }

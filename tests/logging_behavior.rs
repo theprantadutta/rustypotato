@@ -4,7 +4,7 @@
 //! health checks, and log rotation functionality.
 
 use rustypotato::{
-    config::{Config, LogFormat, LoggingConfig},
+    config::{Config, LogFormat},
     logging::{check_logging_health, LoggingMetrics, LoggingSystem, MetricsWriter},
     metrics::{ConnectionEvent, MetricsCollector, StorageOperation, Timer},
     monitoring::{
@@ -36,7 +36,7 @@ async fn test_logging_system_initialization() {
     let result = logging_system.initialize().await;
     // Don't assert on initialization result as it may fail if global subscriber is already set
     if result.is_err() {
-        println!("Logging system already initialized: {:?}", result);
+        println!("Logging system already initialized: {result:?}");
     }
 
     // Test that we can write log messages
@@ -64,7 +64,7 @@ async fn test_logging_system_initialization() {
     for line in log_content.lines() {
         if !line.trim().is_empty() {
             let _: serde_json::Value =
-                serde_json::from_str(line).expect(&format!("Invalid JSON log line: {}", line));
+                serde_json::from_str(line).unwrap_or_else(|_| panic!("Invalid JSON log line: {line}"));
         }
     }
 
@@ -248,20 +248,14 @@ async fn test_health_checker_comprehensive() {
     for (name, component) in components {
         assert_eq!(
             component.status, "healthy",
-            "Component {} should be healthy: {:?}",
-            name, component
+            "Component {name} should be healthy: {component:?}"
         );
-        // Response time should be >= 0 (some components might be very fast)
-        assert!(
-            component.response_time_ms >= 0,
-            "Component {} should have valid response time: {}",
-            name,
-            component.response_time_ms
-        );
+        // Response time should be a valid number (no need to check >= 0 for u64)
+        // Just verify it's accessible
+        let _response_time = component.response_time_ms;
         assert!(
             component.error.is_none(),
-            "Component {} should have no errors",
-            name
+            "Component {name} should have no errors"
         );
     }
 
@@ -348,7 +342,7 @@ async fn test_log_rotation_cleanup() {
 
     // Create and rotate multiple times
     for i in 1..=5 {
-        let content = format!("Log content {}\n", i);
+        let content = format!("Log content {i}\n");
         tokio::fs::write(&log_path, &content).await.unwrap();
 
         // Wait a bit to ensure different timestamps
@@ -368,7 +362,7 @@ async fn test_log_rotation_cleanup() {
             all_files.push(name);
         }
     }
-    println!("All files in temp dir: {:?}", all_files);
+    println!("All files in temp dir: {all_files:?}");
     println!("Status rotated files count: {}", status.rotated_files_count);
 
     // The cleanup might not work perfectly in tests due to timing
@@ -487,23 +481,23 @@ async fn test_histogram_accuracy() {
     let expected_avg = values.iter().sum::<Duration>() / values.len() as u32;
 
     // Allow some tolerance due to rounding
-    let diff = if avg > expected_avg {
-        avg - expected_avg
-    } else {
-        expected_avg - avg
-    };
+    let diff = avg.abs_diff(expected_avg);
     assert!(
         diff < Duration::from_micros(100),
-        "Average calculation inaccurate: got {:?}, expected {:?}",
-        avg,
-        expected_avg
+        "Average calculation inaccurate: got {avg:?}, expected {expected_avg:?}"
     );
 }
 
 #[tokio::test]
 async fn test_logging_metrics_serialization() {
-    let mut metrics = LoggingMetrics::default();
-    metrics.total_log_messages = 1000;
+    let mut metrics = LoggingMetrics {
+        total_log_messages: 1000,
+        log_file_size_bytes: 1024 * 1024,
+        rotated_files_count: 3,
+        last_rotation: Some("2024-01-01T00:00:00Z".to_string()),
+        logging_errors: 5,
+        ..Default::default()
+    };
     metrics
         .log_messages_by_level
         .insert("info".to_string(), 800);
@@ -513,10 +507,6 @@ async fn test_logging_metrics_serialization() {
     metrics
         .log_messages_by_level
         .insert("error".to_string(), 50);
-    metrics.log_file_size_bytes = 1024 * 1024;
-    metrics.rotated_files_count = 3;
-    metrics.last_rotation = Some("2024-01-01T00:00:00Z".to_string());
-    metrics.logging_errors = 5;
 
     // Test JSON serialization
     let json = serde_json::to_string(&metrics).unwrap();
@@ -573,11 +563,11 @@ async fn test_concurrent_metrics_collection() {
         let handle = tokio::spawn(async move {
             for j in 0..100 {
                 collector
-                    .record_command_latency(&format!("CMD_{}", i), Duration::from_micros(j * 10))
+                    .record_command_latency(&format!("CMD_{i}"), Duration::from_micros(j * 10))
                     .await;
 
                 collector
-                    .record_network_bytes(i as u64 * 100, j as u64 * 50)
+                    .record_network_bytes(i as u64 * 100, j * 50)
                     .await;
 
                 if j % 10 == 0 {
@@ -608,7 +598,7 @@ async fn test_concurrent_metrics_collection() {
     assert_eq!(command_metrics.command_counts.len(), 10); // CMD_0 through CMD_9
 
     for i in 0..10 {
-        let cmd_name = format!("CMD_{}", i);
+        let cmd_name = format!("CMD_{i}");
         assert_eq!(command_metrics.command_counts.get(&cmd_name), Some(&100));
     }
 }

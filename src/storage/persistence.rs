@@ -203,20 +203,7 @@ impl AofWriter {
         self.flush_to_disk(true).await
     }
 
-    /// Flush buffer without syncing to disk
-    async fn flush_buffer_only(&mut self) -> Result<()> {
-        // First serialize any pending batch entries
-        if !self.batch_buffer.is_empty() {
-            for entry in &self.batch_buffer {
-                let serialized = self.serialize_entry(entry)?;
-                self.buffer.extend_from_slice(&serialized);
-            }
-            self.batch_buffer.clear();
-        }
 
-        // Flush to disk without sync
-        self.flush_to_disk(false).await
-    }
 
     /// Serialize an AOF entry to bytes
     fn serialize_entry(&self, entry: &AofEntry) -> Result<Vec<u8>> {
@@ -225,7 +212,7 @@ impl AofWriter {
         // Format: TIMESTAMP COMMAND ARGS...
         match &entry.command {
             AofCommand::Set { key, value } => {
-                let value_str = value.to_string();
+                let value_str = value.as_string();
                 let line = format!("{} SET {} {}\n", entry.timestamp, key, value_str);
                 result.extend_from_slice(line.as_bytes());
             }
@@ -234,7 +221,7 @@ impl AofWriter {
                 value,
                 expires_at,
             } => {
-                let value_str = value.to_string();
+                let value_str = value.as_string();
                 let line = format!(
                     "{} SETEX {} {} {}\n",
                     entry.timestamp, key, expires_at, value_str
@@ -719,6 +706,7 @@ fn instant_to_timestamp(instant: Instant) -> u64 {
 }
 
 /// Convert timestamp to Instant
+#[allow(dead_code)]
 fn timestamp_to_instant(timestamp: u64) -> Instant {
     let now = Instant::now();
     let system_now = SystemTime::now();
@@ -745,14 +733,15 @@ mod tests {
     use tokio::time::sleep;
 
     fn create_test_config(aof_path: PathBuf) -> Config {
-        let mut config = Config::default();
-        config.storage = StorageConfig {
-            aof_enabled: true,
-            aof_path,
-            aof_fsync_policy: FsyncPolicy::Always,
-            memory_limit: None,
-        };
-        config
+        Config {
+            storage: StorageConfig {
+                aof_enabled: true,
+                aof_path,
+                aof_fsync_policy: FsyncPolicy::Always,
+                memory_limit: None,
+            },
+            ..Default::default()
+        }
     }
 
     #[tokio::test]

@@ -748,8 +748,8 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             join_set.spawn(async move {
-                let key = format!("key{}", i);
-                let value = format!("value{}", i);
+                let key = format!("key{i}");
+                let value = format!("value{i}");
 
                 // SET
                 let set_cmd = SetCommand;

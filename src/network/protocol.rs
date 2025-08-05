@@ -178,7 +178,7 @@ impl RespCodec {
             let value = line
                 .parse::<i64>()
                 .map_err(|_| RustyPotatoError::ProtocolError {
-                    message: format!("Invalid integer: {}", line),
+                    message: format!("Invalid integer: {line}"),
                     command: None,
                     source: None,
                 })?;
@@ -195,7 +195,7 @@ impl RespCodec {
                 length_str
                     .parse::<i32>()
                     .map_err(|_| RustyPotatoError::ProtocolError {
-                        message: format!("Invalid bulk string length: {}", length_str),
+                        message: format!("Invalid bulk string length: {length_str}"),
                         command: None,
                         source: None,
                     })?;
@@ -206,7 +206,7 @@ impl RespCodec {
 
             if length < 0 {
                 return Err(RustyPotatoError::ProtocolError {
-                    message: format!("Invalid bulk string length: {}", length),
+                    message: format!("Invalid bulk string length: {length}"),
                     command: None,
                     source: None,
                 });
@@ -251,7 +251,7 @@ impl RespCodec {
                 length_str
                     .parse::<i32>()
                     .map_err(|_| RustyPotatoError::ProtocolError {
-                        message: format!("Invalid array length: {}", length_str),
+                        message: format!("Invalid array length: {length_str}"),
                         command: None,
                         source: None,
                     })?;
@@ -262,7 +262,7 @@ impl RespCodec {
 
             if length < 0 {
                 return Err(RustyPotatoError::ProtocolError {
-                    message: format!("Invalid array length: {}", length),
+                    message: format!("Invalid array length: {length}"),
                     command: None,
                     source: None,
                 });
@@ -818,7 +818,7 @@ mod tests {
             RespValue::Integer(42),
         ]);
 
-        let debug_str = format!("{:?}", val);
+        let debug_str = format!("{val:?}");
         assert!(debug_str.contains("Array"));
         assert!(debug_str.contains("SimpleString"));
         assert!(debug_str.contains("Integer"));

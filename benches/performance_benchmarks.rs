@@ -34,8 +34,8 @@ fn bench_memory_store(c: &mut Criterion) {
         // Pre-populate with test data
         rt.block_on(async {
             for i in 0..1000 {
-                let key = format!("bench_key_{}", i);
-                let value = ValueType::String(format!("bench_value_{}", i));
+                let key = format!("bench_key_{i}");
+                let value = ValueType::String(format!("bench_value_{i}"));
                 store.set(key, value).await.unwrap();
             }
         });
@@ -124,7 +124,7 @@ fn bench_integer_operations(c: &mut Criterion) {
         // Pre-populate with integer values
         rt.block_on(async {
             for i in 0..1000 {
-                let key = format!("incr_existing_{}", i);
+                let key = format!("incr_existing_{i}");
                 store.set(key, ValueType::Integer(0)).await.unwrap();
             }
         });
@@ -141,7 +141,7 @@ fn bench_integer_operations(c: &mut Criterion) {
         // Pre-populate with integer values
         rt.block_on(async {
             for i in 0..1000 {
-                let key = format!("decr_existing_{}", i);
+                let key = format!("decr_existing_{i}");
                 store.set(key, ValueType::Integer(100)).await.unwrap();
             }
         });
@@ -180,8 +180,8 @@ fn bench_ttl_operations(c: &mut Criterion) {
         // Pre-populate with keys that have TTL
         rt.block_on(async {
             for i in 0..1000 {
-                let key = format!("ttl_key_{}", i);
-                let value = ValueType::String(format!("ttl_value_{}", i));
+                let key = format!("ttl_key_{i}");
+                let value = ValueType::String(format!("ttl_value_{i}"));
                 store.set(key.clone(), value).await.unwrap();
                 store.expire(&key, 3600).await.unwrap();
             }
@@ -334,8 +334,8 @@ fn bench_scalability(c: &mut Criterion) {
 
                     // Pre-populate with keys
                     for i in 0..key_count {
-                        let key = format!("scale_key_{}", i);
-                        let value = ValueType::String(format!("scale_value_{}", i));
+                        let key = format!("scale_key_{i}");
+                        let value = ValueType::String(format!("scale_value_{i}"));
                         store.set(key, value).await.unwrap();
                     }
 

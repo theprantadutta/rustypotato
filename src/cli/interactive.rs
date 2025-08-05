@@ -31,7 +31,7 @@ impl InteractiveMode {
 
         // Connect to server
         if let Err(e) = self.client.connect().await {
-            eprintln!("Failed to connect to server: {}", e);
+            eprintln!("Failed to connect to server: {e}");
             return Err(e);
         }
 
@@ -92,17 +92,17 @@ impl InteractiveMode {
                     // Parse and execute command
                     match self.parse_and_execute(input).await {
                         Ok(response) => {
-                            let formatted = self.client.format_response(&response);
-                            println!("{}", formatted);
+                            let formatted = CliClient::format_response(&response);
+                            println!("{formatted}");
                         }
                         Err(e) => {
-                            eprintln!("Error: {}", e);
+                            eprintln!("Error: {e}");
                         }
                     }
                 }
                 Err(e) => {
                     error!("Failed to read input: {}", e);
-                    eprintln!("Failed to read input: {}", e);
+                    eprintln!("Failed to read input: {e}");
                     break;
                 }
             }

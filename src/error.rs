@@ -229,7 +229,7 @@ impl RustyPotatoError {
     pub fn to_client_error(&self) -> String {
         match self {
             RustyPotatoError::InvalidCommand { command, .. } => {
-                format!("ERR unknown command '{}'", command)
+                format!("ERR unknown command '{command}'")
             }
             RustyPotatoError::WrongArity {
                 command,
@@ -237,30 +237,29 @@ impl RustyPotatoError {
                 actual,
             } => {
                 format!(
-                    "ERR wrong number of arguments for '{}' command (expected {}, got {})",
-                    command, expected, actual
+                    "ERR wrong number of arguments for '{command}' command (expected {expected}, got {actual})"
                 )
             }
             RustyPotatoError::NotAnInteger { value } => {
-                format!("ERR value is not an integer or out of range: {}", value)
+                format!("ERR value is not an integer or out of range: {value}")
             }
             RustyPotatoError::KeyNotFound { key } => {
-                format!("ERR no such key: {}", key)
+                format!("ERR no such key: {key}")
             }
             RustyPotatoError::ProtocolError { message, .. } => {
-                format!("ERR protocol error: {}", message)
+                format!("ERR protocol error: {message}")
             }
             RustyPotatoError::AuthenticationError { message, .. } => {
-                format!("ERR authentication failed: {}", message)
+                format!("ERR authentication failed: {message}")
             }
             RustyPotatoError::AuthorizationError { message, .. } => {
-                format!("ERR authorization failed: {}", message)
+                format!("ERR authorization failed: {message}")
             }
             RustyPotatoError::TimeoutError { message, .. } => {
-                format!("ERR timeout: {}", message)
+                format!("ERR timeout: {message}")
             }
             RustyPotatoError::ResourceExhaustion { message, .. } => {
-                format!("ERR resource exhausted: {}", message)
+                format!("ERR resource exhausted: {message}")
             }
             _ => "ERR internal server error".to_string(),
         }
@@ -665,7 +664,7 @@ impl From<std::num::ParseIntError> for RustyPotatoError {
 impl From<std::string::FromUtf8Error> for RustyPotatoError {
     fn from(error: std::string::FromUtf8Error) -> Self {
         RustyPotatoError::ProtocolError {
-            message: format!("Invalid UTF-8 sequence: {}", error),
+            message: format!("Invalid UTF-8 sequence: {error}"),
             command: None,
             source: Some(Box::new(error)),
         }
