@@ -139,7 +139,12 @@ jobs:
         cp README.md LICENSE-MIT LICENSE-APACHE release/${{ matrix.name }}/
         cd release
         tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
-        sha256sum ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+        # Use shasum on macOS, sha256sum on Linux
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+        else
+          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+        fi
     
     - name: Prepare release assets (Windows)
       if: matrix.archive == 'zip'
@@ -150,7 +155,8 @@ jobs:
         cp README.md, LICENSE-MIT, LICENSE-APACHE release/${{ matrix.name }}/
         cd release
         Compress-Archive -Path ${{ matrix.name }} -DestinationPath ${{ matrix.name }}.zip
-        Get-FileHash ${{ matrix.name }}.zip -Algorithm SHA256 | Select-Object Hash | Out-File -FilePath ${{ matrix.name }}.zip.sha256 -Encoding ASCII
+        $hash = (Get-FileHash ${{ matrix.name }}.zip -Algorithm SHA256).Hash.ToLower()
+        "$hash  ${{ matrix.name }}.zip" | Out-File -FilePath ${{ matrix.name }}.zip.sha256 -Encoding ASCII
       shell: powershell
     
     - name: Upload release assets
