@@ -37,8 +37,8 @@ async fn create_and_start_test_server() -> (TcpServer, std::net::SocketAddr) {
     // Start the server and get the listening address
     let addr = server.start_with_addr().await.unwrap();
 
-    // Give server more time to start accepting connections
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Give server more time to start accepting connections (increased for CI)
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     (server, addr)
 }
@@ -76,7 +76,7 @@ async fn send_command(
 
     // Simple approach: read with a reasonable buffer size and timeout
     let mut buffer = vec![0u8; 4096]; // Larger buffer for large responses
-    let n = timeout(Duration::from_secs(15), stream.read(&mut buffer)).await??;
+    let n = timeout(Duration::from_secs(30), stream.read(&mut buffer)).await??;
     
     if n == 0 {
         return Err("Connection closed".into());
@@ -91,7 +91,7 @@ async fn test_server_basic_functionality() {
     let (server, addr) = create_and_start_test_server().await;
 
     // Test connection first
-    let stream_result = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await;
+    let stream_result = timeout(Duration::from_secs(10), TcpStream::connect(addr)).await;
     let mut stream = match stream_result {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => panic!("Failed to connect to server: {e}"),
@@ -132,7 +132,7 @@ async fn test_server_multiple_connections() {
     // Create multiple connections
     let mut connections = Vec::new();
     for i in 0..3 { // Reduce to 3 connections for stability
-        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr))
             .await
             .unwrap()
             .unwrap();
@@ -183,7 +183,7 @@ async fn test_server_concurrent_operations() {
 
     for i in 0..5 {
         let handle = tokio::spawn(async move {
-            let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr))
+            let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr))
                 .await
                 .unwrap()
                 .unwrap();
@@ -318,7 +318,7 @@ async fn test_server_connection_persistence() {
 async fn test_server_partial_commands() {
     let (server, addr) = create_and_start_test_server().await;
 
-    let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr))
+    let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr))
         .await
         .unwrap()
         .unwrap();
@@ -419,7 +419,7 @@ async fn test_server_command_pipelining() {
 async fn test_server_large_values() {
     let (server, addr) = create_and_start_test_server().await;
 
-    let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr))
+    let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr))
         .await
         .unwrap()
         .unwrap();

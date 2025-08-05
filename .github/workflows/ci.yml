@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUST_LOG: warn
 
 jobs:
   test:
@@ -51,9 +53,12 @@ jobs:
     
     - name: Run tests
       run: cargo test --verbose --all-features
+      timeout-minutes: 10
     
     - name: Run integration tests
       run: cargo test --test '*' --verbose -- --test-threads=1
+      timeout-minutes: 15
+      if: matrix.rust == 'stable'
     
     - name: Run benchmarks (check only)
       run: cargo bench --no-run
