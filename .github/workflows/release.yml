@@ -14,12 +14,18 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Add permissions for the workflow
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
 jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      tag_name: ${{ steps.tag.outputs.tag }}
       release_id: ${{ steps.create_release.outputs.id }}
     steps:
     - uses: actions/checkout@v4
@@ -35,12 +41,10 @@ jobs:
     
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.tag.outputs.tag }}
-        release_name: RustyPotato ${{ steps.tag.outputs.tag }}
+        name: RustyPotato ${{ steps.tag.outputs.tag }}
         body: |
           ## What's Changed
           
@@ -69,6 +73,7 @@ jobs:
           See the `checksums.txt` file for SHA256 checksums of all release assets.
         draft: false
         prerelease: false
+        generate_release_notes: true
 
   build-binaries:
     name: Build Binaries
@@ -148,37 +153,13 @@ jobs:
         Get-FileHash ${{ matrix.name }}.zip -Algorithm SHA256 | Select-Object Hash | Out-File -FilePath ${{ matrix.name }}.zip.sha256 -Encoding ASCII
       shell: powershell
     
-    - name: Upload release asset (tar.gz)
-      if: matrix.archive == 'tar.gz'
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./release/${{ matrix.name }}.tar.gz
-        asset_name: ${{ matrix.name }}.tar.gz
-        asset_content_type: application/gzip
-    
-    - name: Upload release asset (zip)
-      if: matrix.archive == 'zip'
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./release/${{ matrix.name }}.zip
-        asset_name: ${{ matrix.name }}.zip
-        asset_content_type: application/zip
-    
-    - name: Upload checksum
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./release/${{ matrix.name }}.${{ matrix.archive }}.sha256
-        asset_name: ${{ matrix.name }}.${{ matrix.archive }}.sha256
-        asset_content_type: text/plain
+        tag_name: ${{ needs.create-release.outputs.tag_name }}
+        files: |
+          ./release/${{ matrix.name }}.${{ matrix.archive }}
+          ./release/${{ matrix.name }}.${{ matrix.archive }}.sha256
 
   build-docker:
     name: Build and Push Docker Images
@@ -279,11 +260,7 @@ jobs:
         find . -name "*.sha256" -exec cat {} \; >> checksums.txt
     
     - name: Upload checksums
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
-        upload_url: ${{ needs.create-release.outputs.upload_url }}
-        asset_path: ./checksums.txt
-        asset_name: checksums.txt
-        asset_content_type: text/plain
+        tag_name: ${{ needs.create-release.outputs.tag_name }}
+        files: ./checksums.txt
