@@ -119,7 +119,7 @@ jobs:
         echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
     
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -227,7 +227,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -251,22 +251,3 @@ jobs:
         formula: rustypotato
       continue-on-error: true
 
-  create-checksums:
-    name: Create Checksums File
-    needs: [create-release, build-binaries]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v3
-    
-    - name: Create checksums file
-      run: |
-        echo "# RustyPotato Release Checksums" > checksums.txt
-        echo "" >> checksums.txt
-        find . -name "*.sha256" -exec cat {} \; >> checksums.txt
-    
-    - name: Upload checksums
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ needs.create-release.outputs.tag_name }}
-        files: ./checksums.txt
