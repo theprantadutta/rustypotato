@@ -13,8 +13,9 @@ WORKDIR /app
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy source code
+# Copy source code and benchmarks (needed for Cargo.toml validation)
 COPY src ./src
+COPY benches ./benches
 
 # Build for release (exclude benchmarks and tests for Docker)
 RUN cargo build --release --bins
