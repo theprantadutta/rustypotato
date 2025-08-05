@@ -1,10 +1,10 @@
 //! Client connection management with connection pooling
-//! 
+//!
 //! This module handles individual client connections and maintains a pool
 //! of active connections with configurable limits and statistics tracking.
 //! Includes optimized buffer reuse and connection pooling for performance.
 
-use crate::error::{RustyPotatoError, Result};
+use crate::error::{Result, RustyPotatoError};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use std::collections::VecDeque;
@@ -92,7 +92,7 @@ impl ClientConnection {
     /// Create a new client connection
     pub fn new(client_id: Uuid, stream: TcpStream, remote_addr: SocketAddr) -> Self {
         let now = Instant::now();
-        
+
         Self {
             client_id,
             stream,
@@ -196,7 +196,7 @@ impl ConnectionPool {
         // Create buffer pool with reasonable defaults
         let buffer_pool_size = (max_connections / 10).max(10).min(1000);
         let buffer_pool = Arc::new(BufferPool::new(buffer_pool_size, 8192));
-        
+
         Self {
             connections: DashMap::new(),
             max_connections,
@@ -229,7 +229,8 @@ impl ConnectionPool {
     /// Add a new connection to the pool
     pub async fn add_connection(&self, connection: ClientConnection) -> Result<()> {
         if !self.can_accept_connection().await {
-            self.total_connections_rejected.fetch_add(1, Ordering::Relaxed);
+            self.total_connections_rejected
+                .fetch_add(1, Ordering::Relaxed);
             return Err(RustyPotatoError::NetworkError {
                 message: "Connection pool is full".to_string(),
                 source: None,
@@ -238,10 +239,16 @@ impl ConnectionPool {
         }
 
         let client_id = connection.client_id;
-        self.connections.insert(client_id, Arc::new(tokio::sync::Mutex::new(connection)));
-        self.total_connections_accepted.fetch_add(1, Ordering::Relaxed);
-        
-        debug!("Added connection {} to pool (active: {})", client_id, self.connections.len());
+        self.connections
+            .insert(client_id, Arc::new(tokio::sync::Mutex::new(connection)));
+        self.total_connections_accepted
+            .fetch_add(1, Ordering::Relaxed);
+
+        debug!(
+            "Added connection {} to pool (active: {})",
+            client_id,
+            self.connections.len()
+        );
         Ok(())
     }
 
@@ -249,7 +256,11 @@ impl ConnectionPool {
     pub async fn remove_connection(&self, client_id: Uuid) -> Result<()> {
         match self.connections.remove(&client_id) {
             Some(_) => {
-                debug!("Removed connection {} from pool (active: {})", client_id, self.connections.len());
+                debug!(
+                    "Removed connection {} from pool (active: {})",
+                    client_id,
+                    self.connections.len()
+                );
                 Ok(())
             }
             None => {
@@ -264,8 +275,13 @@ impl ConnectionPool {
     }
 
     /// Get a connection by client ID
-    pub async fn get_connection(&self, client_id: Uuid) -> Option<Arc<tokio::sync::Mutex<ClientConnection>>> {
-        self.connections.get(&client_id).map(|entry| Arc::clone(entry.value()))
+    pub async fn get_connection(
+        &self,
+        client_id: Uuid,
+    ) -> Option<Arc<tokio::sync::Mutex<ClientConnection>>> {
+        self.connections
+            .get(&client_id)
+            .map(|entry| Arc::clone(entry.value()))
     }
 
     /// Get the number of active connections
@@ -295,19 +311,21 @@ impl ConnectionPool {
             max_connections: self.max_connections,
             total_connections_accepted: self.total_connections_accepted().await,
             total_connections_rejected: self.total_connections_rejected().await,
-            utilization_percentage: (self.active_connections().await as f64 / self.max_connections as f64) * 100.0,
+            utilization_percentage: (self.active_connections().await as f64
+                / self.max_connections as f64)
+                * 100.0,
         }
     }
 
     /// Get information about all active connections
     pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
         let mut connections = Vec::new();
-        
+
         for entry in self.connections.iter() {
             let connection = entry.value().lock().await;
             connections.push(connection.connection_info().await);
         }
-        
+
         connections.sort_by(|a, b| a.connected_at.cmp(&b.connected_at));
         connections
     }
@@ -316,16 +334,16 @@ impl ConnectionPool {
     pub async fn find_idle_connections(&self, idle_threshold: std::time::Duration) -> Vec<Uuid> {
         let mut idle_connections = Vec::new();
         let now = Instant::now();
-        
+
         for entry in self.connections.iter() {
             let connection = entry.value().lock().await;
             let last_activity = connection.get_last_activity().await;
-            
+
             if now.duration_since(last_activity) > idle_threshold {
                 idle_connections.push(connection.client_id);
             }
         }
-        
+
         idle_connections
     }
 
@@ -373,20 +391,20 @@ mod tests {
     async fn create_test_connection() -> (ClientConnection, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        
+
         let client_stream = TcpStream::connect(addr).await.unwrap();
         let (server_stream, client_addr) = listener.accept().await.unwrap();
-        
+
         let client_id = Uuid::new_v4();
         let connection = ClientConnection::new(client_id, server_stream, client_addr);
-        
+
         (connection, client_stream)
     }
 
     #[tokio::test]
     async fn test_client_connection_creation() {
         let (connection, _) = create_test_connection().await;
-        
+
         assert_eq!(connection.get_commands_processed(), 0);
         assert!(connection.connection_duration().as_millis() < 100); // Should be very recent
     }
@@ -394,13 +412,13 @@ mod tests {
     #[tokio::test]
     async fn test_client_connection_activity_tracking() {
         let (connection, _) = create_test_connection().await;
-        
+
         let initial_activity = connection.get_last_activity().await;
-        
+
         // Wait a bit and update activity
         tokio::time::sleep(Duration::from_millis(10)).await;
         connection.update_last_activity().await;
-        
+
         let updated_activity = connection.get_last_activity().await;
         assert!(updated_activity > initial_activity);
     }
@@ -408,12 +426,12 @@ mod tests {
     #[tokio::test]
     async fn test_client_connection_command_counting() {
         let (connection, _) = create_test_connection().await;
-        
+
         assert_eq!(connection.get_commands_processed(), 0);
-        
+
         connection.increment_commands_processed();
         assert_eq!(connection.get_commands_processed(), 1);
-        
+
         connection.increment_commands_processed();
         connection.increment_commands_processed();
         assert_eq!(connection.get_commands_processed(), 3);
@@ -422,10 +440,10 @@ mod tests {
     #[tokio::test]
     async fn test_client_connection_info() {
         let (connection, _) = create_test_connection().await;
-        
+
         connection.increment_commands_processed();
         let info = connection.connection_info().await;
-        
+
         assert_eq!(info.client_id, connection.client_id);
         assert_eq!(info.remote_addr, connection.remote_addr);
         assert_eq!(info.commands_processed, 1);
@@ -435,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn test_connection_pool_creation() {
         let pool = ConnectionPool::new(100);
-        
+
         assert_eq!(pool.max_connections(), 100);
         assert_eq!(pool.active_connections().await, 0);
         assert_eq!(pool.total_connections_accepted().await, 0);
@@ -449,13 +467,13 @@ mod tests {
         let pool = ConnectionPool::new(10);
         let (connection, _) = create_test_connection().await;
         let client_id = connection.client_id;
-        
+
         // Add connection
         let result = pool.add_connection(connection).await;
         assert!(result.is_ok());
         assert_eq!(pool.active_connections().await, 1);
         assert_eq!(pool.total_connections_accepted().await, 1);
-        
+
         // Remove connection
         let result = pool.remove_connection(client_id).await;
         assert!(result.is_ok());
@@ -465,18 +483,18 @@ mod tests {
     #[tokio::test]
     async fn test_connection_pool_limits() {
         let pool = ConnectionPool::new(2);
-        
+
         // Add first connection
         let (connection1, _) = create_test_connection().await;
         assert!(pool.add_connection(connection1).await.is_ok());
         assert!(pool.can_accept_connection().await);
-        
+
         // Add second connection
         let (connection2, _) = create_test_connection().await;
         assert!(pool.add_connection(connection2).await.is_ok());
         assert!(!pool.can_accept_connection().await);
         assert!(pool.is_full().await);
-        
+
         // Try to add third connection (should fail)
         let (connection3, _) = create_test_connection().await;
         let result = pool.add_connection(connection3).await;
@@ -489,10 +507,10 @@ mod tests {
         let pool = ConnectionPool::new(10);
         let (connection, _) = create_test_connection().await;
         let client_id = connection.client_id;
-        
+
         // Add connection
         pool.add_connection(connection).await.unwrap();
-        
+
         // Get connection
         let retrieved = pool.get_connection(client_id).await;
         assert!(retrieved.is_some());
@@ -502,7 +520,7 @@ mod tests {
             conn.client_id
         };
         assert_eq!(retrieved_client_id, client_id);
-        
+
         // Try to get non-existent connection
         let non_existent = pool.get_connection(Uuid::new_v4()).await;
         assert!(non_existent.is_none());
@@ -513,10 +531,10 @@ mod tests {
         let pool = ConnectionPool::new(10);
         let (connection1, _) = create_test_connection().await;
         let (connection2, _) = create_test_connection().await;
-        
+
         pool.add_connection(connection1).await.unwrap();
         pool.add_connection(connection2).await.unwrap();
-        
+
         let stats = pool.stats().await;
         assert_eq!(stats.active_connections, 2);
         assert_eq!(stats.max_connections, 10);
@@ -530,14 +548,14 @@ mod tests {
         let pool = ConnectionPool::new(10);
         let (connection1, _) = create_test_connection().await;
         let (connection2, _) = create_test_connection().await;
-        
+
         pool.add_connection(connection1).await.unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await; // Ensure different timestamps
         pool.add_connection(connection2).await.unwrap();
-        
+
         let connections = pool.list_connections().await;
         assert_eq!(connections.len(), 2);
-        
+
         // Should be sorted by connection time
         assert!(connections[0].connected_at <= connections[1].connected_at);
     }
@@ -547,13 +565,13 @@ mod tests {
         let pool = ConnectionPool::new(10);
         let (connection, _) = create_test_connection().await;
         let client_id = connection.client_id;
-        
+
         pool.add_connection(connection).await.unwrap();
-        
+
         // Should not be idle immediately
         let idle = pool.find_idle_connections(Duration::from_millis(100)).await;
         assert!(idle.is_empty());
-        
+
         // Wait and check again
         tokio::time::sleep(Duration::from_millis(150)).await;
         let idle = pool.find_idle_connections(Duration::from_millis(100)).await;
@@ -566,12 +584,12 @@ mod tests {
         let pool = ConnectionPool::new(10);
         let (connection1, _) = create_test_connection().await;
         let (connection2, _) = create_test_connection().await;
-        
+
         pool.add_connection(connection1).await.unwrap();
         pool.add_connection(connection2).await.unwrap();
-        
+
         assert_eq!(pool.active_connections().await, 2);
-        
+
         let closed_count = pool.close_all_connections().await;
         assert_eq!(closed_count, 2);
         assert_eq!(pool.active_connections().await, 0);
@@ -582,10 +600,13 @@ mod tests {
     async fn test_connection_pool_remove_nonexistent() {
         let pool = ConnectionPool::new(10);
         let non_existent_id = Uuid::new_v4();
-        
+
         let result = pool.remove_connection(non_existent_id).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found in pool"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not found in pool"));
     }
 
     #[tokio::test]
@@ -604,7 +625,7 @@ mod tests {
             total_connections_rejected: 2,
             utilization_percentage: 50.0,
         };
-        
+
         assert_eq!(stats.active_connections, 5);
         assert_eq!(stats.max_connections, 10);
         assert_eq!(stats.total_connections_accepted, 15);
@@ -617,7 +638,7 @@ mod tests {
         let client_id = Uuid::new_v4();
         let remote_addr = "127.0.0.1:12345".parse().unwrap();
         let now = Instant::now();
-        
+
         let info = ConnectionInfo {
             client_id,
             remote_addr,
@@ -628,7 +649,7 @@ mod tests {
             bytes_written: 512,
             connection_duration: Duration::from_secs(10),
         };
-        
+
         assert_eq!(info.client_id, client_id);
         assert_eq!(info.remote_addr, remote_addr);
         assert_eq!(info.commands_processed, 42);

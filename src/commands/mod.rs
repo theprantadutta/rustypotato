@@ -1,21 +1,21 @@
 //! Command implementations and execution framework
-//! 
+//!
 //! This module contains all command implementations for RustyPotato,
 //! including basic operations (SET, GET, DEL), TTL management, and
 //! atomic operations.
 
+pub mod atomic;
 pub mod registry;
 pub mod string;
 pub mod ttl;
-pub mod atomic;
 
 #[cfg(test)]
 mod integration_tests;
 
+pub use atomic::{DecrCommand, IncrCommand};
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
-pub use string::{SetCommand, GetCommand, DelCommand, ExistsCommand};
+pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};
-pub use atomic::{IncrCommand, DecrCommand};
 
 /// Command execution result types
 #[derive(Debug, Clone, PartialEq)]

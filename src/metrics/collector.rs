@@ -1,5 +1,5 @@
 //! Metrics collector for gathering performance and operational metrics
-//! 
+//!
 //! This module provides a centralized metrics collection system that tracks
 //! various aspects of RustyPotato performance including command latencies,
 //! network throughput, storage operations, and system health.
@@ -37,10 +37,10 @@ impl MetricsCollector {
     pub async fn record_command_latency(&self, command: &str, duration: Duration) {
         let mut commands = self.commands.write().await;
         commands.record_command(command, duration);
-        
+
         let mut performance = self.performance.write().await;
         performance.record_operation_latency(duration);
-        
+
         debug!("Recorded command '{}' latency: {:?}", command, duration);
     }
 
@@ -102,16 +102,16 @@ impl MetricsCollector {
     pub async fn reset(&self) {
         let mut performance = self.performance.write().await;
         performance.reset();
-        
+
         let mut commands = self.commands.write().await;
         commands.reset();
-        
+
         let mut network = self.network.write().await;
         network.reset();
-        
+
         let mut storage = self.storage.write().await;
         storage.reset();
-        
+
         debug!("All metrics reset");
     }
 
@@ -240,7 +240,7 @@ impl CommandMetrics {
     pub fn command_error_rate(&self, command: &str) -> f64 {
         let errors = self.command_errors.get(command).unwrap_or(&0);
         let total = self.command_counts.get(command).unwrap_or(&0);
-        
+
         if *total > 0 {
             *errors as f64 / *total as f64
         } else {
@@ -436,7 +436,7 @@ mod tests {
     async fn test_metrics_collector_creation() {
         let collector = MetricsCollector::new();
         assert!(collector.uptime() < Duration::from_millis(100));
-        
+
         let summary = collector.get_summary().await;
         assert_eq!(summary.total_operations, 0);
         assert_eq!(summary.total_commands, 0);
@@ -445,16 +445,22 @@ mod tests {
     #[tokio::test]
     async fn test_command_metrics() {
         let collector = MetricsCollector::new();
-        
-        collector.record_command_latency("SET", Duration::from_micros(100)).await;
-        collector.record_command_latency("GET", Duration::from_micros(50)).await;
-        collector.record_command_latency("SET", Duration::from_micros(120)).await;
-        
+
+        collector
+            .record_command_latency("SET", Duration::from_micros(100))
+            .await;
+        collector
+            .record_command_latency("GET", Duration::from_micros(50))
+            .await;
+        collector
+            .record_command_latency("SET", Duration::from_micros(120))
+            .await;
+
         let metrics = collector.get_command_metrics().await;
         assert_eq!(metrics.total_commands(), 3);
         assert_eq!(metrics.command_counts.get("SET"), Some(&2));
         assert_eq!(metrics.command_counts.get("GET"), Some(&1));
-        
+
         let most_frequent = metrics.most_frequent_command();
         assert_eq!(most_frequent, Some(("SET".to_string(), 2)));
     }
@@ -462,12 +468,18 @@ mod tests {
     #[tokio::test]
     async fn test_network_metrics() {
         let collector = MetricsCollector::new();
-        
+
         collector.record_network_bytes(1024, 512).await;
-        collector.record_connection_event(ConnectionEvent::Connected).await;
-        collector.record_connection_event(ConnectionEvent::Connected).await;
-        collector.record_connection_event(ConnectionEvent::Rejected).await;
-        
+        collector
+            .record_connection_event(ConnectionEvent::Connected)
+            .await;
+        collector
+            .record_connection_event(ConnectionEvent::Connected)
+            .await;
+        collector
+            .record_connection_event(ConnectionEvent::Rejected)
+            .await;
+
         let metrics = collector.get_network_metrics().await;
         assert_eq!(metrics.total_bytes_read, 1024);
         assert_eq!(metrics.total_bytes_written, 512);
@@ -479,24 +491,20 @@ mod tests {
     #[tokio::test]
     async fn test_storage_metrics() {
         let collector = MetricsCollector::new();
-        
-        collector.record_storage_operation(
-            StorageOperation::AofWrite(256), 
-            Duration::from_micros(200)
-        ).await;
-        collector.record_storage_operation(
-            StorageOperation::MemoryRead, 
-            Duration::from_micros(10)
-        ).await;
-        collector.record_storage_operation(
-            StorageOperation::CacheHit, 
-            Duration::ZERO
-        ).await;
-        collector.record_storage_operation(
-            StorageOperation::CacheMiss, 
-            Duration::ZERO
-        ).await;
-        
+
+        collector
+            .record_storage_operation(StorageOperation::AofWrite(256), Duration::from_micros(200))
+            .await;
+        collector
+            .record_storage_operation(StorageOperation::MemoryRead, Duration::from_micros(10))
+            .await;
+        collector
+            .record_storage_operation(StorageOperation::CacheHit, Duration::ZERO)
+            .await;
+        collector
+            .record_storage_operation(StorageOperation::CacheMiss, Duration::ZERO)
+            .await;
+
         let metrics = collector.get_storage_metrics().await;
         assert_eq!(metrics.aof_writes, 1);
         assert_eq!(metrics.aof_bytes_written, 256);
@@ -510,11 +518,15 @@ mod tests {
     #[tokio::test]
     async fn test_performance_metrics() {
         let collector = MetricsCollector::new();
-        
-        collector.record_command_latency("TEST", Duration::from_micros(100)).await;
-        collector.record_command_latency("TEST", Duration::from_micros(200)).await;
+
+        collector
+            .record_command_latency("TEST", Duration::from_micros(100))
+            .await;
+        collector
+            .record_command_latency("TEST", Duration::from_micros(200))
+            .await;
         collector.record_memory_usage(1024 * 1024).await;
-        
+
         let metrics = collector.get_performance_metrics().await;
         assert_eq!(metrics.total_operations, 2);
         assert_eq!(metrics.current_memory_usage, 1024 * 1024);
@@ -525,15 +537,17 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_reset() {
         let collector = MetricsCollector::new();
-        
-        collector.record_command_latency("SET", Duration::from_micros(100)).await;
+
+        collector
+            .record_command_latency("SET", Duration::from_micros(100))
+            .await;
         collector.record_network_bytes(1024, 512).await;
-        
+
         let summary_before = collector.get_summary().await;
         assert!(summary_before.total_operations > 0);
-        
+
         collector.reset().await;
-        
+
         let summary_after = collector.get_summary().await;
         assert_eq!(summary_after.total_operations, 0);
         assert_eq!(summary_after.total_commands, 0);
@@ -543,11 +557,11 @@ mod tests {
     #[test]
     fn test_command_metrics_error_rate() {
         let mut metrics = CommandMetrics::new();
-        
+
         metrics.record_command("SET", Duration::from_micros(100));
         metrics.record_command("SET", Duration::from_micros(120));
         metrics.record_command_error("SET");
-        
+
         assert_eq!(metrics.command_error_rate("SET"), 0.5); // 1 error out of 2 commands
         assert_eq!(metrics.command_error_rate("GET"), 0.0); // No GET commands
     }
@@ -555,10 +569,10 @@ mod tests {
     #[test]
     fn test_network_metrics_throughput() {
         let mut metrics = NetworkMetrics::new();
-        
+
         metrics.add_bytes_read(1024 * 1024); // 1MB
         metrics.add_bytes_written(512 * 1024); // 512KB
-        
+
         let throughput = metrics.throughput_mbps(Duration::from_secs(1));
         assert!(throughput > 10.0 && throughput < 15.0); // ~12 Mbps with some tolerance
     }

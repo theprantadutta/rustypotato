@@ -10,10 +10,10 @@ use uuid::Uuid;
 pub trait Command: Send + Sync {
     /// Execute the command with given arguments
     async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult;
-    
+
     /// Get the command name
     fn name(&self) -> &'static str;
-    
+
     /// Get the command arity specification
     fn arity(&self) -> super::CommandArity;
 }
@@ -36,33 +36,37 @@ pub struct ParsedCommand {
 impl ParsedCommand {
     /// Create a new parsed command
     pub fn new(name: String, args: Vec<String>, client_id: Uuid) -> Self {
-        Self { name, args, client_id }
+        Self {
+            name,
+            args,
+            client_id,
+        }
     }
-    
+
     /// Parse a command string into a ParsedCommand
     /// Supports Redis-style command parsing: "SET key value"
     pub fn parse(input: &str, client_id: Uuid) -> Result<Self, String> {
         let parts: Vec<&str> = input.trim().split_whitespace().collect();
-        
+
         if parts.is_empty() {
             return Err("Empty command".to_string());
         }
-        
+
         let name = parts[0].to_string();
         let args = parts[1..].iter().map(|s| s.to_string()).collect();
-        
+
         Ok(Self::new(name, args, client_id))
     }
-    
+
     /// Get the total number of arguments (including command name)
     pub fn total_args(&self) -> usize {
         self.args.len() + 1
     }
-    
+
     /// Check if the command has the expected number of arguments
     pub fn validate_arity(&self, arity: &super::CommandArity) -> Result<(), String> {
         let total = self.total_args();
-        
+
         match arity {
             super::CommandArity::Fixed(expected) => {
                 if total != *expected {
@@ -89,7 +93,7 @@ impl ParsedCommand {
                 }
             }
         }
-        
+
         Ok(())
     }
 }
@@ -106,49 +110,50 @@ impl CommandRegistry {
             commands: HashMap::new(),
         }
     }
-    
+
     /// Register a command
     pub fn register(&mut self, command: Box<dyn Command>) {
         let name = command.name().to_uppercase();
         self.commands.insert(name, command);
     }
-    
+
     /// Execute a parsed command with validation
     pub async fn execute(&self, cmd: &ParsedCommand, store: &MemoryStore) -> CommandResult {
         let command_name = cmd.name.to_uppercase();
-        
+
         match self.commands.get(&command_name) {
             Some(command) => {
                 // Validate command arity before execution
                 if let Err(err) = cmd.validate_arity(&command.arity()) {
                     return CommandResult::Error(format!("ERR {}", err));
                 }
-                
+
                 // Execute the command
                 command.execute(&cmd.args, store).await
             }
             None => CommandResult::Error(format!("ERR unknown command '{}'", cmd.name)),
         }
     }
-    
+
     /// Check if a command exists
     pub fn has_command(&self, name: &str) -> bool {
         self.commands.contains_key(&name.to_uppercase())
     }
-    
+
     /// Get the list of registered command names
     pub fn command_names(&self) -> Vec<String> {
         self.commands.keys().cloned().collect()
     }
-    
+
     /// Get the number of registered commands
     pub fn command_count(&self) -> usize {
         self.commands.len()
     }
-    
+
     /// Get command information for a specific command
     pub fn get_command_info(&self, name: &str) -> Option<(&str, super::CommandArity)> {
-        self.commands.get(&name.to_uppercase())
+        self.commands
+            .get(&name.to_uppercase())
             .map(|cmd| (cmd.name(), cmd.arity()))
     }
 }
@@ -179,9 +184,10 @@ mod tests {
             if self.should_error {
                 CommandResult::Error("Mock error".to_string())
             } else {
-                CommandResult::Ok(crate::commands::ResponseValue::SimpleString(
-                    format!("Mock response with {} args", args.len())
-                ))
+                CommandResult::Ok(crate::commands::ResponseValue::SimpleString(format!(
+                    "Mock response with {} args",
+                    args.len()
+                )))
             }
         }
 
@@ -276,11 +282,7 @@ mod tests {
     #[test]
     fn test_validate_arity_fixed_invalid() {
         let client_id = Uuid::new_v4();
-        let cmd = ParsedCommand::new(
-            "SET".to_string(),
-            vec!["key".to_string()],
-            client_id,
-        );
+        let cmd = ParsedCommand::new("SET".to_string(), vec!["key".to_string()], client_id);
 
         let result = cmd.validate_arity(&CommandArity::Fixed(3));
         assert!(result.is_err());
@@ -315,7 +317,13 @@ mod tests {
         let client_id = Uuid::new_v4();
         let cmd = ParsedCommand::new(
             "DEL".to_string(),
-            vec!["k1".to_string(), "k2".to_string(), "k3".to_string(), "k4".to_string(), "k5".to_string()],
+            vec![
+                "k1".to_string(),
+                "k2".to_string(),
+                "k3".to_string(),
+                "k4".to_string(),
+                "k5".to_string(),
+            ],
             client_id,
         );
 
@@ -374,13 +382,13 @@ mod tests {
     #[test]
     fn test_command_registry_command_names() {
         let mut registry = CommandRegistry::new();
-        
+
         registry.register(Box::new(MockCommand {
             name: "SET",
             arity: CommandArity::Fixed(3),
             should_error: false,
         }));
-        
+
         registry.register(Box::new(MockCommand {
             name: "GET",
             arity: CommandArity::Fixed(2),
@@ -496,8 +504,12 @@ mod tests {
 
     #[test]
     fn test_command_result_equality() {
-        let result1 = CommandResult::Ok(crate::commands::ResponseValue::SimpleString("test".to_string()));
-        let result2 = CommandResult::Ok(crate::commands::ResponseValue::SimpleString("test".to_string()));
+        let result1 = CommandResult::Ok(crate::commands::ResponseValue::SimpleString(
+            "test".to_string(),
+        ));
+        let result2 = CommandResult::Ok(crate::commands::ResponseValue::SimpleString(
+            "test".to_string(),
+        ));
         let result3 = CommandResult::Error("error".to_string());
         let result4 = CommandResult::Error("error".to_string());
 

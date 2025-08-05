@@ -2,7 +2,10 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::{CommandRegistry, SetCommand, GetCommand, DelCommand, ExistsCommand, IncrCommand, DecrCommand, ParsedCommand};
+    use crate::commands::{
+        CommandRegistry, DecrCommand, DelCommand, ExistsCommand, GetCommand, IncrCommand,
+        ParsedCommand, SetCommand,
+    };
     use crate::storage::MemoryStore;
     use uuid::Uuid;
 
@@ -14,40 +17,56 @@ mod tests {
         registry.register(Box::new(GetCommand));
         registry.register(Box::new(DelCommand));
         registry.register(Box::new(ExistsCommand));
-        
+
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        
+
         // Test SET command
         let set_cmd = ParsedCommand::parse("SET mykey myvalue", client_id).unwrap();
         let result = registry.execute(&set_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK")
+        );
+
         // Test GET command
         let get_cmd = ParsedCommand::parse("GET mykey", client_id).unwrap();
         let result = registry.execute(&get_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "myvalue"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "myvalue")
+        );
+
         // Test EXISTS command
         let exists_cmd = ParsedCommand::parse("EXISTS mykey", client_id).unwrap();
         let result = registry.execute(&exists_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))
+        ));
+
         // Test DEL command
         let del_cmd = ParsedCommand::parse("DEL mykey", client_id).unwrap();
         let result = registry.execute(&del_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))
+        ));
+
         // Verify key is deleted
         let get_cmd2 = ParsedCommand::parse("GET mykey", client_id).unwrap();
         let result = registry.execute(&get_cmd2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(None))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(None))
+        ));
+
         let exists_cmd2 = ParsedCommand::parse("EXISTS mykey", client_id).unwrap();
         let result = registry.execute(&exists_cmd2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(0))));
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(0))
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_multiple_keys_workflow() {
         let mut registry = CommandRegistry::new();
@@ -55,92 +74,122 @@ mod tests {
         registry.register(Box::new(GetCommand));
         registry.register(Box::new(DelCommand));
         registry.register(Box::new(ExistsCommand));
-        
+
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        
+
         // Set multiple keys
         for i in 1..=5 {
             let cmd = ParsedCommand::parse(&format!("SET key{} value{}", i, i), client_id).unwrap();
             let result = registry.execute(&cmd, &store).await;
-            assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
+            assert!(
+                matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK")
+            );
         }
-        
+
         // Check all keys exist
-        let exists_cmd = ParsedCommand::parse("EXISTS key1 key2 key3 key4 key5", client_id).unwrap();
+        let exists_cmd =
+            ParsedCommand::parse("EXISTS key1 key2 key3 key4 key5", client_id).unwrap();
         let result = registry.execute(&exists_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(5))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(5))
+        ));
+
         // Delete some keys
         let del_cmd = ParsedCommand::parse("DEL key1 key3 key5", client_id).unwrap();
         let result = registry.execute(&del_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(3))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(3))
+        ));
+
         // Check remaining keys
-        let exists_cmd2 = ParsedCommand::parse("EXISTS key1 key2 key3 key4 key5", client_id).unwrap();
+        let exists_cmd2 =
+            ParsedCommand::parse("EXISTS key1 key2 key3 key4 key5", client_id).unwrap();
         let result = registry.execute(&exists_cmd2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(2)))); // key2 and key4
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(2))
+        )); // key2 and key4
+
         // Verify specific keys
         let get_key2 = ParsedCommand::parse("GET key2", client_id).unwrap();
         let result = registry.execute(&get_key2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "value2"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "value2")
+        );
+
         let get_key4 = ParsedCommand::parse("GET key4", client_id).unwrap();
         let result = registry.execute(&get_key4, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "value4"));
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "value4")
+        );
     }
-    
+
     #[tokio::test]
     async fn test_case_insensitive_commands() {
         let mut registry = CommandRegistry::new();
         registry.register(Box::new(SetCommand));
         registry.register(Box::new(GetCommand));
-        
+
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        
+
         // Test lowercase commands
         let set_cmd = ParsedCommand::parse("set testkey testvalue", client_id).unwrap();
         let result = registry.execute(&set_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK")
+        );
+
         // Test uppercase commands
         let get_cmd = ParsedCommand::parse("GET testkey", client_id).unwrap();
         let result = registry.execute(&get_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "testvalue"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "testvalue")
+        );
+
         // Test mixed case commands
         let get_cmd2 = ParsedCommand::parse("GeT testkey", client_id).unwrap();
         let result = registry.execute(&get_cmd2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "testvalue"));
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "testvalue")
+        );
     }
-    
+
     #[tokio::test]
     async fn test_error_handling_integration() {
         let mut registry = CommandRegistry::new();
         registry.register(Box::new(SetCommand));
         registry.register(Box::new(GetCommand));
-        
+
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        
+
         // Test unknown command
         let unknown_cmd = ParsedCommand::parse("UNKNOWN key", client_id).unwrap();
         let result = registry.execute(&unknown_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("unknown command")));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("unknown command"))
+        );
+
         // Test wrong arity
         let wrong_arity_cmd = ParsedCommand::parse("SET onlykey", client_id).unwrap();
         let result = registry.execute(&wrong_arity_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("wrong number of arguments")));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("wrong number of arguments"))
+        );
+
         // Test GET on non-existent key (should return nil, not error)
         let get_missing_cmd = ParsedCommand::parse("GET nonexistent", client_id).unwrap();
         let result = registry.execute(&get_missing_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(None))));
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(None))
+        ));
     }
-    
+
     #[tokio::test]
     async fn test_atomic_operations_integration() {
         let mut registry = CommandRegistry::new();
@@ -148,59 +197,86 @@ mod tests {
         registry.register(Box::new(GetCommand));
         registry.register(Box::new(IncrCommand));
         registry.register(Box::new(DecrCommand));
-        
+
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        
+
         // Test INCR on new key
         let incr_cmd = ParsedCommand::parse("INCR counter", client_id).unwrap();
         let result = registry.execute(&incr_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))
+        ));
+
         // Test INCR on existing key
         let incr_cmd2 = ParsedCommand::parse("INCR counter", client_id).unwrap();
         let result = registry.execute(&incr_cmd2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(2))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(2))
+        ));
+
         // Test DECR on existing key
         let decr_cmd = ParsedCommand::parse("DECR counter", client_id).unwrap();
         let result = registry.execute(&decr_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(1))
+        ));
+
         // Test DECR on new key
         let decr_cmd2 = ParsedCommand::parse("DECR newcounter", client_id).unwrap();
         let result = registry.execute(&decr_cmd2, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(-1))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(-1))
+        ));
+
         // Test INCR on string number
         let set_cmd = ParsedCommand::parse("SET strcounter 42", client_id).unwrap();
         let result = registry.execute(&set_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK")
+        );
+
         let incr_str_cmd = ParsedCommand::parse("INCR strcounter", client_id).unwrap();
         let result = registry.execute(&incr_str_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(43))));
-        
+        assert!(matches!(
+            result,
+            crate::commands::CommandResult::Ok(crate::commands::ResponseValue::Integer(43))
+        ));
+
         // Test INCR on non-numeric string (should error)
         let set_invalid_cmd = ParsedCommand::parse("SET invalid not_a_number", client_id).unwrap();
         let result = registry.execute(&set_invalid_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::SimpleString(ref s)) if s == "OK")
+        );
+
         let incr_invalid_cmd = ParsedCommand::parse("INCR invalid", client_id).unwrap();
         let result = registry.execute(&incr_invalid_cmd, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("value is not an integer")));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Error(ref msg) if msg.contains("value is not an integer"))
+        );
+
         // Verify final values with GET
         let get_counter = ParsedCommand::parse("GET counter", client_id).unwrap();
         let result = registry.execute(&get_counter, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "1"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "1")
+        );
+
         let get_newcounter = ParsedCommand::parse("GET newcounter", client_id).unwrap();
         let result = registry.execute(&get_newcounter, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "-1"));
-        
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "-1")
+        );
+
         let get_strcounter = ParsedCommand::parse("GET strcounter", client_id).unwrap();
         let result = registry.execute(&get_strcounter, &store).await;
-        assert!(matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "43"));
+        assert!(
+            matches!(result, crate::commands::CommandResult::Ok(crate::commands::ResponseValue::BulkString(Some(ref s))) if s == "43")
+        );
     }
 }

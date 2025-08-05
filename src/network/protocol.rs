@@ -1,10 +1,10 @@
 //! Redis RESP protocol implementation
-//! 
+//!
 //! This module implements the Redis Serialization Protocol (RESP) for
 //! encoding responses and decoding client commands.
 
-use crate::commands::{ResponseValue, ParsedCommand};
-use crate::error::{RustyPotatoError, Result};
+use crate::commands::{ParsedCommand, ResponseValue};
+use crate::error::{Result, RustyPotatoError};
 use bytes::{Buf, BufMut, BytesMut};
 use std::io::Cursor;
 
@@ -32,7 +32,7 @@ impl RespCodec {
     /// Decode RESP data into a ParsedCommand
     pub fn decode(&mut self, data: &[u8]) -> Result<Option<ParsedCommand>> {
         self.buffer.extend_from_slice(data);
-        
+
         if let Some(command) = self.try_parse_command()? {
             Ok(Some(command))
         } else {
@@ -50,7 +50,8 @@ impl RespCodec {
             }
             ResponseValue::BulkString(Some(s)) => {
                 self.buffer.put_u8(b'$');
-                self.buffer.extend_from_slice(s.len().to_string().as_bytes());
+                self.buffer
+                    .extend_from_slice(s.len().to_string().as_bytes());
                 self.buffer.extend_from_slice(b"\r\n");
                 self.buffer.extend_from_slice(s.as_bytes());
                 self.buffer.extend_from_slice(b"\r\n");
@@ -65,7 +66,8 @@ impl RespCodec {
             }
             ResponseValue::Array(arr) => {
                 self.buffer.put_u8(b'*');
-                self.buffer.extend_from_slice(arr.len().to_string().as_bytes());
+                self.buffer
+                    .extend_from_slice(arr.len().to_string().as_bytes());
                 self.buffer.extend_from_slice(b"\r\n");
                 for item in arr {
                     self.encode_value(item)?;
@@ -82,23 +84,25 @@ impl RespCodec {
         }
 
         let mut cursor = Cursor::new(&self.buffer[..]);
-        
+
         // Parse the command array
         match self.parse_resp_value(&mut cursor)? {
             Some(RespValue::Array(elements)) => {
                 let consumed = cursor.position() as usize;
-                
+
                 // Convert RESP array to command
                 let mut args = Vec::new();
                 for element in elements {
                     match element {
                         RespValue::BulkString(Some(s)) => args.push(s),
                         RespValue::SimpleString(s) => args.push(s),
-                        _ => return Err(RustyPotatoError::ProtocolError {
-                            message: "Command arguments must be strings".to_string(),
-                            command: None,
-                            source: None,
-                        }),
+                        _ => {
+                            return Err(RustyPotatoError::ProtocolError {
+                                message: "Command arguments must be strings".to_string(),
+                                command: None,
+                                source: None,
+                            })
+                        }
                     }
                 }
 
@@ -116,7 +120,7 @@ impl RespCodec {
 
                 // Remove consumed bytes from buffer
                 self.buffer.advance(consumed);
-                
+
                 Ok(Some(parsed_command))
             }
             Some(_) => Err(RustyPotatoError::ProtocolError {
@@ -135,7 +139,7 @@ impl RespCodec {
         }
 
         let type_byte = cursor.get_u8();
-        
+
         match type_byte {
             b'+' => self.parse_simple_string(cursor),
             b'-' => self.parse_error(cursor),
@@ -171,7 +175,8 @@ impl RespCodec {
     /// Parse an integer (:123\r\n)
     fn parse_integer(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<RespValue>> {
         if let Some(line) = self.read_line(cursor)? {
-            let value = line.parse::<i64>()
+            let value = line
+                .parse::<i64>()
                 .map_err(|_| RustyPotatoError::ProtocolError {
                     message: format!("Invalid integer: {}", line),
                     command: None,
@@ -186,12 +191,14 @@ impl RespCodec {
     /// Parse a bulk string ($5\r\nhello\r\n or $-1\r\n for null)
     fn parse_bulk_string(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<RespValue>> {
         if let Some(length_str) = self.read_line(cursor)? {
-            let length = length_str.parse::<i32>()
-                .map_err(|_| RustyPotatoError::ProtocolError {
-                    message: format!("Invalid bulk string length: {}", length_str),
-                    command: None,
-                    source: None,
-                })?;
+            let length =
+                length_str
+                    .parse::<i32>()
+                    .map_err(|_| RustyPotatoError::ProtocolError {
+                        message: format!("Invalid bulk string length: {}", length_str),
+                        command: None,
+                        source: None,
+                    })?;
 
             if length == -1 {
                 return Ok(Some(RespValue::BulkString(None)));
@@ -206,7 +213,7 @@ impl RespCodec {
             }
 
             let length = length as usize;
-            
+
             // Check if we have enough data for the string + \r\n
             if cursor.remaining() < length + 2 {
                 return Ok(None); // Need more data
@@ -214,7 +221,7 @@ impl RespCodec {
 
             let mut string_data = vec![0u8; length];
             cursor.copy_to_slice(&mut string_data);
-            
+
             // Verify \r\n terminator
             if cursor.remaining() < 2 || cursor.get_u8() != b'\r' || cursor.get_u8() != b'\n' {
                 return Err(RustyPotatoError::ProtocolError {
@@ -224,8 +231,8 @@ impl RespCodec {
                 });
             }
 
-            let string = String::from_utf8(string_data)
-                .map_err(|_| RustyPotatoError::ProtocolError {
+            let string =
+                String::from_utf8(string_data).map_err(|_| RustyPotatoError::ProtocolError {
                     message: "Invalid UTF-8 in bulk string".to_string(),
                     command: None,
                     source: None,
@@ -240,12 +247,14 @@ impl RespCodec {
     /// Parse an array (*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n)
     fn parse_array(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<RespValue>> {
         if let Some(length_str) = self.read_line(cursor)? {
-            let length = length_str.parse::<i32>()
-                .map_err(|_| RustyPotatoError::ProtocolError {
-                    message: format!("Invalid array length: {}", length_str),
-                    command: None,
-                    source: None,
-                })?;
+            let length =
+                length_str
+                    .parse::<i32>()
+                    .map_err(|_| RustyPotatoError::ProtocolError {
+                        message: format!("Invalid array length: {}", length_str),
+                        command: None,
+                        source: None,
+                    })?;
 
             if length == -1 {
                 return Ok(Some(RespValue::Array(vec![])));
@@ -280,24 +289,25 @@ impl RespCodec {
     fn read_line(&self, cursor: &mut Cursor<&[u8]>) -> Result<Option<String>> {
         let start_pos = cursor.position() as usize;
         let data = cursor.get_ref();
-        
+
         // Look for \r\n
         for i in start_pos..data.len().saturating_sub(1) {
             if data[i] == b'\r' && data[i + 1] == b'\n' {
                 let line_data = &data[start_pos..i];
                 cursor.set_position((i + 2) as u64);
-                
-                let line = String::from_utf8(line_data.to_vec())
-                    .map_err(|_| RustyPotatoError::ProtocolError {
+
+                let line = String::from_utf8(line_data.to_vec()).map_err(|_| {
+                    RustyPotatoError::ProtocolError {
                         message: "Invalid UTF-8 in line".to_string(),
                         command: None,
                         source: None,
-                    })?;
-                
+                    }
+                })?;
+
                 return Ok(Some(line));
             }
         }
-        
+
         Ok(None) // No complete line found
     }
 }
@@ -418,7 +428,7 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
         let result = codec.decode(data).unwrap();
-        
+
         assert!(result.is_some());
         let cmd = result.unwrap();
         assert_eq!(cmd.name, "GET");
@@ -430,7 +440,7 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n";
         let result = codec.decode(data).unwrap();
-        
+
         assert!(result.is_some());
         let cmd = result.unwrap();
         assert_eq!(cmd.name, "SET");
@@ -442,21 +452,21 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*2\r\n$3\r\nGET\r\n$3\r\nk"; // Incomplete
         let result = codec.decode(data).unwrap();
-        
+
         assert!(result.is_none()); // Need more data
     }
 
     #[test]
     fn test_decode_multiple_commands() {
         let mut codec = RespCodec::new();
-        
+
         // First command
         let data1 = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
         let result1 = codec.decode(data1).unwrap();
         assert!(result1.is_some());
         let cmd1 = result1.unwrap();
         assert_eq!(cmd1.name, "GET");
-        
+
         // Second command
         let data2 = b"*3\r\n$3\r\nSET\r\n$4\r\nkey2\r\n$6\r\nvalue2\r\n";
         let result2 = codec.decode(data2).unwrap();
@@ -471,7 +481,7 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$0\r\n\r\n";
         let result = codec.decode(data).unwrap();
-        
+
         assert!(result.is_some());
         let cmd = result.unwrap();
         assert_eq!(cmd.name, "SET");
@@ -483,9 +493,12 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*abc\r\n$3\r\nGET\r\n";
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid array length"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid array length"));
     }
 
     #[test]
@@ -493,9 +506,12 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*2\r\n$3\r\nGET\r\n$abc\r\nkey\r\n";
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid bulk string length"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid bulk string length"));
     }
 
     #[test]
@@ -503,9 +519,12 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*2\r\n$3\r\nGET\r\n$-5\r\n";
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid bulk string length"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid bulk string length"));
     }
 
     #[test]
@@ -513,9 +532,12 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*2\r\n$3\r\nGET$3\r\nkey\r\n"; // Missing \r\n after GET
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Missing \\r\\n terminator"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing \\r\\n terminator"));
     }
 
     #[test]
@@ -524,7 +546,7 @@ mod tests {
         let mut data = b"*2\r\n$3\r\nGET\r\n$3\r\n".to_vec();
         data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8
         data.extend_from_slice(b"\r\n");
-        
+
         let result = codec.decode(&data);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid UTF-8"));
@@ -535,9 +557,12 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*0\r\n";
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Empty command array"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Empty command array"));
     }
 
     #[test]
@@ -547,9 +572,12 @@ mod tests {
         // We need to test this at the RespValue parsing level
         let data = b"*2\r\n$3\r\nGET\r\n:42\r\n";
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Command arguments must be strings"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Command arguments must be strings"));
     }
 
     #[test]
@@ -557,9 +585,12 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"@invalid\r\n"; // @ is not a valid RESP type
         let result = codec.decode(data);
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown RESP type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown RESP type"));
     }
 
     #[test]
@@ -568,7 +599,7 @@ mod tests {
         let data: &[u8] = b"+OK\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '+'
-        
+
         let result = codec.parse_simple_string(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::SimpleString("OK".to_string())));
     }
@@ -579,7 +610,7 @@ mod tests {
         let data: &[u8] = b"-ERR message\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '-'
-        
+
         let result = codec.parse_error(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::Error("ERR message".to_string())));
     }
@@ -590,7 +621,7 @@ mod tests {
         let data: &[u8] = b":42\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the ':'
-        
+
         let result = codec.parse_integer(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::Integer(42)));
     }
@@ -601,7 +632,7 @@ mod tests {
         let data: &[u8] = b":-123\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the ':'
-        
+
         let result = codec.parse_integer(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::Integer(-123)));
     }
@@ -612,9 +643,12 @@ mod tests {
         let data: &[u8] = b"$5\r\nhello\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '$'
-        
+
         let result = codec.parse_bulk_string(&mut cursor).unwrap();
-        assert_eq!(result, Some(RespValue::BulkString(Some("hello".to_string()))));
+        assert_eq!(
+            result,
+            Some(RespValue::BulkString(Some("hello".to_string())))
+        );
     }
 
     #[test]
@@ -623,7 +657,7 @@ mod tests {
         let data: &[u8] = b"$-1\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '$'
-        
+
         let result = codec.parse_bulk_string(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::BulkString(None)));
     }
@@ -634,7 +668,7 @@ mod tests {
         let data: &[u8] = b"$0\r\n\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '$'
-        
+
         let result = codec.parse_bulk_string(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::BulkString(Some("".to_string()))));
     }
@@ -645,12 +679,15 @@ mod tests {
         let data: &[u8] = b"*2\r\n+OK\r\n:42\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '*'
-        
+
         let result = codec.parse_array(&mut cursor).unwrap();
-        assert_eq!(result, Some(RespValue::Array(vec![
-            RespValue::SimpleString("OK".to_string()),
-            RespValue::Integer(42),
-        ])));
+        assert_eq!(
+            result,
+            Some(RespValue::Array(vec![
+                RespValue::SimpleString("OK".to_string()),
+                RespValue::Integer(42),
+            ]))
+        );
     }
 
     #[test]
@@ -659,7 +696,7 @@ mod tests {
         let data: &[u8] = b"*0\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '*'
-        
+
         let result = codec.parse_array(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::Array(vec![])));
     }
@@ -670,7 +707,7 @@ mod tests {
         let data: &[u8] = b"*-1\r\n";
         let mut cursor = Cursor::new(data);
         cursor.advance(1); // Skip the '*'
-        
+
         let result = codec.parse_array(&mut cursor).unwrap();
         assert_eq!(result, Some(RespValue::Array(vec![])));
     }
@@ -680,7 +717,7 @@ mod tests {
         let codec = RespCodec::new();
         let data: &[u8] = b"hello world\r\nmore data";
         let mut cursor = Cursor::new(data);
-        
+
         let result = codec.read_line(&mut cursor).unwrap();
         assert_eq!(result, Some("hello world".to_string()));
         assert_eq!(cursor.position(), 13); // After \r\n
@@ -691,7 +728,7 @@ mod tests {
         let codec = RespCodec::new();
         let data: &[u8] = b"hello world";
         let mut cursor = Cursor::new(data);
-        
+
         let result = codec.read_line(&mut cursor).unwrap();
         assert_eq!(result, None); // No \r\n found
     }
@@ -701,7 +738,7 @@ mod tests {
         let codec = RespCodec::new();
         let data: &[u8] = b"hello\r";
         let mut cursor = Cursor::new(data);
-        
+
         let result = codec.read_line(&mut cursor).unwrap();
         assert_eq!(result, None); // No complete \r\n
     }
@@ -721,12 +758,12 @@ mod tests {
     #[test]
     fn test_codec_buffer_reuse() {
         let mut codec = RespCodec::new();
-        
+
         // First encoding
         let value1 = ResponseValue::SimpleString("first".to_string());
         let result1 = codec.encode(&value1).unwrap();
         assert_eq!(result1, b"+first\r\n");
-        
+
         // Second encoding should reuse buffer
         let value2 = ResponseValue::SimpleString("second".to_string());
         let result2 = codec.encode(&value2).unwrap();
@@ -736,17 +773,17 @@ mod tests {
     #[test]
     fn test_decode_partial_then_complete() {
         let mut codec = RespCodec::new();
-        
+
         // Send partial data
         let partial = b"*2\r\n$3\r\nGET\r\n$3\r\nk";
         let result1 = codec.decode(partial).unwrap();
         assert!(result1.is_none());
-        
+
         // Send remaining data
         let remaining = b"ey\r\n";
         let result2 = codec.decode(remaining).unwrap();
         assert!(result2.is_some());
-        
+
         let cmd = result2.unwrap();
         assert_eq!(cmd.name, "GET");
         assert_eq!(cmd.args, vec!["key"]);
@@ -757,7 +794,7 @@ mod tests {
         let mut codec = RespCodec::new();
         let data = b"*2\r\n$3\r\nget\r\n$3\r\nkey\r\n";
         let result = codec.decode(data).unwrap();
-        
+
         assert!(result.is_some());
         let cmd = result.unwrap();
         assert_eq!(cmd.name, "GET"); // Should be uppercase
@@ -769,7 +806,7 @@ mod tests {
         let val1 = RespValue::SimpleString("test".to_string());
         let val2 = RespValue::SimpleString("test".to_string());
         let val3 = RespValue::SimpleString("different".to_string());
-        
+
         assert_eq!(val1, val2);
         assert_ne!(val1, val3);
     }
@@ -780,7 +817,7 @@ mod tests {
             RespValue::SimpleString("test".to_string()),
             RespValue::Integer(42),
         ]);
-        
+
         let debug_str = format!("{:?}", val);
         assert!(debug_str.contains("Array"));
         assert!(debug_str.contains("SimpleString"));

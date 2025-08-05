@@ -1,5 +1,5 @@
 //! Metrics collection and monitoring for RustyPotato
-//! 
+//!
 //! This module provides comprehensive metrics collection for monitoring
 //! performance, throughput, latency, and system health.
 
@@ -7,8 +7,8 @@ pub mod collector;
 pub mod server;
 
 pub use collector::{
-    MetricsCollector, PerformanceMetrics, CommandMetrics, NetworkMetrics, StorageMetrics,
-    ConnectionEvent, StorageOperation, MetricsSummary
+    CommandMetrics, ConnectionEvent, MetricsCollector, MetricsSummary, NetworkMetrics,
+    PerformanceMetrics, StorageMetrics, StorageOperation,
 };
 pub use server::MetricsServer;
 
@@ -26,20 +26,20 @@ impl Histogram {
     /// Create a new histogram with predefined buckets
     pub fn new() -> Self {
         let buckets = vec![
-            (Duration::from_micros(10), 0),    // 10μs
-            (Duration::from_micros(50), 0),    // 50μs
-            (Duration::from_micros(100), 0),   // 100μs
-            (Duration::from_micros(500), 0),   // 500μs
-            (Duration::from_millis(1), 0),     // 1ms
-            (Duration::from_millis(5), 0),     // 5ms
-            (Duration::from_millis(10), 0),    // 10ms
-            (Duration::from_millis(50), 0),    // 50ms
-            (Duration::from_millis(100), 0),   // 100ms
-            (Duration::from_millis(500), 0),   // 500ms
-            (Duration::from_secs(1), 0),       // 1s
-            (Duration::from_secs(5), 0),       // 5s
+            (Duration::from_micros(10), 0),  // 10μs
+            (Duration::from_micros(50), 0),  // 50μs
+            (Duration::from_micros(100), 0), // 100μs
+            (Duration::from_micros(500), 0), // 500μs
+            (Duration::from_millis(1), 0),   // 1ms
+            (Duration::from_millis(5), 0),   // 5ms
+            (Duration::from_millis(10), 0),  // 10ms
+            (Duration::from_millis(50), 0),  // 50ms
+            (Duration::from_millis(100), 0), // 100ms
+            (Duration::from_millis(500), 0), // 500ms
+            (Duration::from_secs(1), 0),     // 1s
+            (Duration::from_secs(5), 0),     // 5s
         ];
-        
+
         Self {
             buckets,
             total_count: 0,
@@ -149,11 +149,11 @@ mod tests {
     #[test]
     fn test_histogram_record() {
         let mut histogram = Histogram::new();
-        
+
         histogram.record(Duration::from_micros(25));
         histogram.record(Duration::from_micros(75));
         histogram.record(Duration::from_micros(150));
-        
+
         assert_eq!(histogram.count(), 3);
         assert_eq!(histogram.sum(), Duration::from_micros(250));
         let avg = histogram.average().unwrap();
@@ -163,14 +163,14 @@ mod tests {
     #[test]
     fn test_histogram_percentiles() {
         let mut histogram = Histogram::new();
-        
+
         // Add 100 values from 1μs to 100μs
         for i in 1..=100 {
             histogram.record(Duration::from_micros(i));
         }
-        
+
         assert_eq!(histogram.count(), 100);
-        
+
         // Test percentiles
         assert!(histogram.percentile(50.0).is_some());
         assert!(histogram.percentile(95.0).is_some());
@@ -180,10 +180,10 @@ mod tests {
     #[test]
     fn test_histogram_reset() {
         let mut histogram = Histogram::new();
-        
+
         histogram.record(Duration::from_micros(100));
         assert_eq!(histogram.count(), 1);
-        
+
         histogram.reset();
         assert_eq!(histogram.count(), 0);
         assert_eq!(histogram.sum(), Duration::ZERO);
@@ -194,7 +194,7 @@ mod tests {
         let timer = Timer::start();
         std::thread::sleep(Duration::from_millis(1));
         let elapsed = timer.stop();
-        
+
         assert!(elapsed >= Duration::from_millis(1));
         assert!(elapsed < Duration::from_millis(100)); // Should be much less than 100ms
     }

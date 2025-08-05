@@ -1,7 +1,7 @@
 //! Interactive REPL mode for CLI
 
 use crate::cli::client::CliClient;
-use crate::error::{RustyPotatoError, Result};
+use crate::error::{Result, RustyPotatoError};
 use std::io::{self, Write};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, error, warn};
@@ -58,7 +58,7 @@ impl InteractiveMode {
                 }
                 Ok(_) => {
                     let input = line.trim();
-                    
+
                     if input.is_empty() {
                         continue;
                     }
@@ -119,7 +119,7 @@ impl InteractiveMode {
     /// Parse command line and execute
     async fn parse_and_execute(&mut self, input: &str) -> Result<crate::commands::ResponseValue> {
         let parts: Vec<&str> = input.split_whitespace().collect();
-        
+
         if parts.is_empty() {
             return Err(RustyPotatoError::InvalidCommand {
                 command: "".to_string(),

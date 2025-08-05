@@ -11,7 +11,7 @@ pub struct Cli {
     /// Server address to connect to
     #[arg(short, long, default_value = "127.0.0.1:6379")]
     pub address: String,
-    
+
     /// Command to execute
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -21,31 +21,17 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Set a key-value pair
-    Set { 
-        key: String, 
-        value: String 
-    },
+    Set { key: String, value: String },
     /// Get a value by key
-    Get { 
-        key: String 
-    },
+    Get { key: String },
     /// Delete a key
-    Del { 
-        key: String 
-    },
+    Del { key: String },
     /// Check if a key exists
-    Exists { 
-        key: String 
-    },
+    Exists { key: String },
     /// Set expiration time for a key
-    Expire { 
-        key: String, 
-        seconds: u64 
-    },
+    Expire { key: String, seconds: u64 },
     /// Get time to live for a key
-    Ttl { 
-        key: String 
-    },
+    Ttl { key: String },
     /// Start interactive REPL mode
     Interactive,
 }

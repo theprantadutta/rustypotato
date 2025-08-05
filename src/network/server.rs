@@ -1,14 +1,14 @@
 //! TCP server implementation with async connection handling
-//! 
+//!
 //! This module implements a high-performance TCP server using tokio for async I/O.
 //! It handles multiple concurrent client connections, command processing, and
 //! graceful shutdown with connection draining.
 
 use crate::commands::{CommandRegistry, CommandResult};
 use crate::config::Config;
-use crate::error::{RustyPotatoError, Result};
-use crate::metrics::{MetricsCollector, ConnectionEvent, Timer};
-use crate::network::{ClientConnection, ConnectionPool, RespCodec, encode_error};
+use crate::error::{Result, RustyPotatoError};
+use crate::metrics::{ConnectionEvent, MetricsCollector, Timer};
+use crate::network::{encode_error, ClientConnection, ConnectionPool, RespCodec};
 use crate::storage::MemoryStore;
 use bytes::BytesMut;
 use std::net::SocketAddr;
@@ -41,7 +41,7 @@ impl TcpServer {
     ) -> Self {
         let connection_pool = Arc::new(ConnectionPool::new(config.server.max_connections));
         let metrics = Arc::new(MetricsCollector::new());
-        
+
         Self {
             config,
             storage,
@@ -61,7 +61,7 @@ impl TcpServer {
         metrics: Arc<MetricsCollector>,
     ) -> Self {
         let connection_pool = Arc::new(ConnectionPool::new(config.server.max_connections));
-        
+
         Self {
             config,
             storage,
@@ -80,15 +80,21 @@ impl TcpServer {
 
     /// Start the TCP server and listen for connections
     pub async fn start(&mut self) -> Result<()> {
-        let bind_addr = format!("{}:{}", self.config.server.bind_address, self.config.server.port);
-        let listener = TcpListener::bind(&bind_addr).await
-            .map_err(|e| RustyPotatoError::NetworkError {
-                message: format!("Failed to bind to {}: {}", bind_addr, e),
-                source: Some(Box::new(e)),
-                connection_id: None,
-            })?;
+        let bind_addr = format!(
+            "{}:{}",
+            self.config.server.bind_address, self.config.server.port
+        );
+        let listener =
+            TcpListener::bind(&bind_addr)
+                .await
+                .map_err(|e| RustyPotatoError::NetworkError {
+                    message: format!("Failed to bind to {}: {}", bind_addr, e),
+                    source: Some(Box::new(e)),
+                    connection_id: None,
+                })?;
 
-        let local_addr = listener.local_addr()
+        let local_addr = listener
+            .local_addr()
             .map_err(|e| RustyPotatoError::NetworkError {
                 message: format!("Failed to get local address: {}", e),
                 source: Some(Box::new(e)),
@@ -110,15 +116,21 @@ impl TcpServer {
 
     /// Start the server and return the listening address (for testing)
     pub async fn start_with_addr(&mut self) -> Result<SocketAddr> {
-        let bind_addr = format!("{}:{}", self.config.server.bind_address, self.config.server.port);
-        let listener = TcpListener::bind(&bind_addr).await
-            .map_err(|e| RustyPotatoError::NetworkError {
-                message: format!("Failed to bind to {}: {}", bind_addr, e),
-                source: Some(Box::new(e)),
-                connection_id: None,
-            })?;
+        let bind_addr = format!(
+            "{}:{}",
+            self.config.server.bind_address, self.config.server.port
+        );
+        let listener =
+            TcpListener::bind(&bind_addr)
+                .await
+                .map_err(|e| RustyPotatoError::NetworkError {
+                    message: format!("Failed to bind to {}: {}", bind_addr, e),
+                    source: Some(Box::new(e)),
+                    connection_id: None,
+                })?;
 
-        let local_addr = listener.local_addr()
+        let local_addr = listener
+            .local_addr()
             .map_err(|e| RustyPotatoError::NetworkError {
                 message: format!("Failed to get local address: {}", e),
                 source: Some(Box::new(e)),
@@ -157,7 +169,11 @@ impl TcpServer {
     }
 
     /// Run the main server loop
-    async fn run_server_loop(&mut self, listener: TcpListener, shutdown_tx: broadcast::Sender<()>) -> Result<()> {
+    async fn run_server_loop(
+        &mut self,
+        listener: TcpListener,
+        shutdown_tx: broadcast::Sender<()>,
+    ) -> Result<()> {
         // Accept connections in a loop
         let mut shutdown_rx = shutdown_tx.subscribe();
         loop {
@@ -199,12 +215,17 @@ impl TcpServer {
     ) -> Result<()> {
         // Check connection limits
         if !self.connection_pool.can_accept_connection().await {
-            warn!("Connection limit reached ({} active), rejecting connection from {}", 
-                  self.connection_pool.active_connections().await, addr);
-            
+            warn!(
+                "Connection limit reached ({} active), rejecting connection from {}",
+                self.connection_pool.active_connections().await,
+                addr
+            );
+
             // Record rejected connection
-            self.metrics.record_connection_event(ConnectionEvent::Rejected).await;
-            
+            self.metrics
+                .record_connection_event(ConnectionEvent::Rejected)
+                .await;
+
             // Send a proper error response before closing
             let error_msg = b"-ERR server connection limit reached\r\n";
             let _ = stream.write_all(error_msg).await;
@@ -224,16 +245,27 @@ impl TcpServer {
 
         // Add to connection pool
         if let Err(e) = self.connection_pool.add_connection(connection).await {
-            error!("Failed to add connection {} from {} to pool: {}", client_id, addr, e);
-            self.metrics.record_connection_event(ConnectionEvent::Rejected).await;
+            error!(
+                "Failed to add connection {} from {} to pool: {}",
+                client_id, addr, e
+            );
+            self.metrics
+                .record_connection_event(ConnectionEvent::Rejected)
+                .await;
             return Err(e);
         }
 
         // Record successful connection
-        self.metrics.record_connection_event(ConnectionEvent::Connected).await;
+        self.metrics
+            .record_connection_event(ConnectionEvent::Connected)
+            .await;
 
-        info!("New client connected: {} from {} (active connections: {})", 
-              client_id, addr, self.connection_pool.active_connections().await);
+        info!(
+            "New client connected: {} from {} (active connections: {})",
+            client_id,
+            addr,
+            self.connection_pool.active_connections().await
+        );
 
         // Spawn connection handler with proper error handling
         let storage = Arc::clone(&self.storage);
@@ -243,34 +275,47 @@ impl TcpServer {
         let metrics = Arc::clone(&self.metrics);
 
         tokio::spawn(async move {
-            let connection_result = if let Some(connection_arc) = connection_pool.get_connection(client_id).await {
-                Self::handle_connection(
-                    connection_arc,
-                    storage,
-                    command_registry,
-                    config,
-                    metrics.clone(),
-                    &mut shutdown_rx,
-                ).await
-            } else {
-                error!("Connection {} not found in pool immediately after adding", client_id);
-                Err(RustyPotatoError::ConnectionError {
-                    message: "Connection not found in pool".to_string(),
-                    connection_id: Some(client_id.to_string()),
-                    source: None,
-                })
-            };
+            let connection_result =
+                if let Some(connection_arc) = connection_pool.get_connection(client_id).await {
+                    Self::handle_connection(
+                        connection_arc,
+                        storage,
+                        command_registry,
+                        config,
+                        metrics.clone(),
+                        &mut shutdown_rx,
+                    )
+                    .await
+                } else {
+                    error!(
+                        "Connection {} not found in pool immediately after adding",
+                        client_id
+                    );
+                    Err(RustyPotatoError::ConnectionError {
+                        message: "Connection not found in pool".to_string(),
+                        connection_id: Some(client_id.to_string()),
+                        source: None,
+                    })
+                };
 
             // Record disconnection and log connection result
-            metrics.record_connection_event(ConnectionEvent::Disconnected).await;
-            
+            metrics
+                .record_connection_event(ConnectionEvent::Disconnected)
+                .await;
+
             match connection_result {
                 Ok(()) => info!("Client {} from {} disconnected cleanly", client_id, addr),
                 Err(e) => {
                     if e.is_client_error() {
-                        info!("Client {} from {} disconnected due to client error: {}", client_id, addr, e);
+                        info!(
+                            "Client {} from {} disconnected due to client error: {}",
+                            client_id, addr, e
+                        );
                     } else {
-                        warn!("Client {} from {} disconnected due to server error: {}", client_id, addr, e);
+                        warn!(
+                            "Client {} from {} disconnected due to server error: {}",
+                            client_id, addr, e
+                        );
                     }
                 }
             }
@@ -279,13 +324,18 @@ impl TcpServer {
             for attempt in 1..=3 {
                 match connection_pool.remove_connection(client_id).await {
                     Ok(()) => {
-                        debug!("Successfully removed connection {} from pool on attempt {}", client_id, attempt);
+                        debug!(
+                            "Successfully removed connection {} from pool on attempt {}",
+                            client_id, attempt
+                        );
                         break;
                     }
                     Err(e) => {
                         if attempt == 3 {
-                            error!("Failed to remove connection {} from pool after {} attempts: {}", 
-                                   client_id, attempt, e);
+                            error!(
+                                "Failed to remove connection {} from pool after {} attempts: {}",
+                                client_id, attempt, e
+                            );
                         } else {
                             warn!("Failed to remove connection {} from pool on attempt {}: {}, retrying...", 
                                   client_id, attempt, e);
@@ -306,7 +356,7 @@ impl TcpServer {
     fn configure_socket(stream: &TcpStream, config: &Config) -> Result<()> {
         // For now, we'll use tokio's built-in socket configuration
         // In a production system, we would use socket2 crate for cross-platform socket options
-        
+
         if let Err(e) = stream.set_nodelay(config.network.tcp_nodelay) {
             return Err(RustyPotatoError::NetworkError {
                 message: format!("Failed to set TCP_NODELAY: {}", e),
@@ -340,7 +390,10 @@ impl TcpServer {
             (conn.client_id, conn.remote_addr)
         };
 
-        info!("Starting connection handler for client {} from {}", client_id, remote_addr);
+        info!(
+            "Starting connection handler for client {} from {}",
+            client_id, remote_addr
+        );
 
         let mut commands_processed = 0u64;
         let connection_start = std::time::Instant::now();
@@ -367,10 +420,10 @@ impl TcpServer {
                         Ok(Ok(bytes_read)) => {
                             // Process received data
                             debug!("Read {} bytes from client {}", bytes_read, client_id);
-                            
+
                             // Record network bytes read
                             metrics.record_network_bytes(bytes_read as u64, 0).await;
-                            
+
                             match Self::process_buffer(
                                 &mut codec,
                                 &mut buffer,
@@ -382,7 +435,7 @@ impl TcpServer {
                             ).await {
                                 Ok(processed_count) => {
                                     commands_processed += processed_count;
-                                    
+
                                     // Log periodic statistics for active connections
                                     if commands_processed % 1000 == 0 {
                                         debug!("Client {} from {} has processed {} commands in {:?}",
@@ -393,26 +446,26 @@ impl TcpServer {
                                     // Enhanced error handling with connection context
                                     let error_context = format!("client_id={}, remote_addr={}, commands_processed={}, connection_duration={:?}",
                                                                client_id, remote_addr, commands_processed, connection_start.elapsed());
-                                    
+
                                     if e.is_client_error() {
                                         warn!("Client error [{}]: {}", error_context, e);
-                                        
+
                                         // Send error response and continue (don't break connection for client errors)
                                         let error_response = encode_error(&e.to_client_error());
                                         if let Err(write_err) = Self::write_response(&connection, &error_response, &config, &metrics).await {
                                             error!("Failed to send error response [{}]: {}", error_context, write_err);
                                             break;
                                         }
-                                        
+
                                         // For protocol errors, we might want to be more aggressive about closing connections
                                         if matches!(e, RustyPotatoError::ProtocolError { .. }) {
-                                            warn!("Protocol error detected [{}], closing connection after {} commands", 
+                                            warn!("Protocol error detected [{}], closing connection after {} commands",
                                                   error_context, commands_processed);
                                             break;
                                         }
                                     } else {
                                         error!("Server error [{}]: {}", error_context, e);
-                                        
+
                                         // Try to send a generic error response before closing
                                         let error_response = encode_error("ERR internal server error");
                                         let _ = Self::write_response(&connection, &error_response, &config, &metrics).await;
@@ -426,7 +479,7 @@ impl TcpServer {
                             break;
                         }
                         Err(_) => {
-                            warn!("Read timeout for client {} from {} after {} commands", 
+                            warn!("Read timeout for client {} from {} after {} commands",
                                   client_id, remote_addr, commands_processed);
                             break;
                         }
@@ -434,7 +487,7 @@ impl TcpServer {
                 }
                 // Handle shutdown signal
                 _ = shutdown_rx.recv() => {
-                    info!("Shutdown signal received for client {} from {}, processed {} commands", 
+                    info!("Shutdown signal received for client {} from {}, processed {} commands",
                           client_id, remote_addr, commands_processed);
                     break;
                 }
@@ -469,68 +522,84 @@ impl TcpServer {
         metrics: &MetricsCollector,
     ) -> Result<u64> {
         let mut commands_processed = 0u64;
-        
+
         // Try to decode commands from the buffer
         while !buffer.is_empty() {
             let buffer_data = buffer.clone().freeze();
-            
+
             match codec.decode(&buffer_data) {
                 Ok(Some(mut command)) => {
                     let (client_id, remote_addr) = {
                         let conn = connection.lock().await;
                         (conn.client_id, conn.remote_addr)
                     };
-                    
+
                     // Set the client ID for the command
                     command.client_id = client_id;
-                    
-                    debug!("Executing command '{}' with {} args for client {} from {}", 
-                           command.name, command.args.len(), client_id, remote_addr);
-                    
+
+                    debug!(
+                        "Executing command '{}' with {} args for client {} from {}",
+                        command.name,
+                        command.args.len(),
+                        client_id,
+                        remote_addr
+                    );
+
                     // Update connection stats
                     {
                         let conn = connection.lock().await;
                         conn.update_last_activity().await;
                         conn.increment_commands_processed();
                     }
-                    
+
                     // Execute the command with timing
                     let timer = Timer::start();
                     let result = command_registry.execute(&command, storage).await;
                     let command_duration = timer.stop();
-                    
+
                     // Record command metrics
-                    metrics.record_command_latency(&command.name, command_duration).await;
-                    
+                    metrics
+                        .record_command_latency(&command.name, command_duration)
+                        .await;
+
                     // Log slow commands
                     if command_duration.as_millis() > 100 {
-                        warn!("Slow command '{}' for client {} took {:?}", 
-                              command.name, client_id, command_duration);
+                        warn!(
+                            "Slow command '{}' for client {} took {:?}",
+                            command.name, client_id, command_duration
+                        );
                     }
-                    
+
                     // Send response
                     match Self::send_response(connection, result, config, metrics).await {
                         Ok(()) => {
                             commands_processed += 1;
-                            debug!("Successfully processed command '{}' for client {} in {:?}", 
-                                   command.name, client_id, command_duration);
+                            debug!(
+                                "Successfully processed command '{}' for client {} in {:?}",
+                                command.name, client_id, command_duration
+                            );
                         }
                         Err(e) => {
-                            error!("Failed to send response for command '{}' to client {} from {}: {}", 
-                                   command.name, client_id, remote_addr, e);
+                            error!(
+                                "Failed to send response for command '{}' to client {} from {}: {}",
+                                command.name, client_id, remote_addr, e
+                            );
                             return Err(e);
                         }
                     }
-                    
+
                     // Clear processed data from buffer
                     buffer.clear();
                 }
                 Ok(None) => {
                     // Need more data - this is normal
-                    debug!("Need more data to complete command parsing for client {}", {
-                        let conn = connection.lock().await;
-                        conn.client_id
-                    });
+                    debug!(
+                        "Need more data to complete command parsing for client {}",
+                        {
+                            let conn = connection.lock().await;
+                            conn.client_id
+                        }
+                    );
                     break;
                 }
                 Err(e) => {
@@ -538,19 +607,22 @@ impl TcpServer {
                         let conn = connection.lock().await;
                         (conn.client_id, conn.remote_addr)
                     };
-                    
-                    warn!("Protocol error for client {} from {}: {}", client_id, remote_addr, e);
-                    
+
+                    warn!(
+                        "Protocol error for client {} from {}: {}",
+                        client_id, remote_addr, e
+                    );
+
                     // Convert to RustyPotatoError for consistent error handling
                     let protocol_error = RustyPotatoError::ProtocolError {
                         message: e.to_string(),
                         command: None,
                         source: Some(Box::new(e)),
                     };
-                    
+
                     // Clear buffer to prevent repeated errors
                     buffer.clear();
-                    
+
                     // Return the error to be handled by the caller
                     return Err(protocol_error);
                 }
@@ -570,16 +642,15 @@ impl TcpServer {
         let response_data = match result {
             CommandResult::Ok(value) => {
                 let mut codec = RespCodec::new();
-                codec.encode(&value)
+                codec
+                    .encode(&value)
                     .map_err(|e| RustyPotatoError::NetworkError {
                         message: format!("Failed to encode response: {}", e),
                         source: Some(Box::new(e)),
                         connection_id: None,
                     })?
             }
-            CommandResult::Error(msg) => {
-                encode_error(&msg)
-            }
+            CommandResult::Error(msg) => encode_error(&msg),
         };
 
         Self::write_response(connection, &response_data, config, metrics).await
@@ -595,17 +666,21 @@ impl TcpServer {
         let mut conn = connection.lock().await;
         match timeout(
             Duration::from_secs(config.network.write_timeout),
-            conn.stream.write_all(data)
-        ).await {
+            conn.stream.write_all(data),
+        )
+        .await
+        {
             Ok(Ok(())) => {
                 // Record bytes written
                 metrics.record_network_bytes(0, data.len() as u64).await;
-                
+
                 // Flush the stream
                 match timeout(
                     Duration::from_secs(config.network.write_timeout),
-                    conn.stream.flush()
-                ).await {
+                    conn.stream.flush(),
+                )
+                .await
+                {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(RustyPotatoError::NetworkError {
                         message: format!("Failed to flush stream: {}", e),
@@ -664,13 +739,19 @@ impl TcpServer {
             active_connections: self.connection_pool.active_connections().await,
             max_connections: self.config.server.max_connections,
             total_connections_accepted: self.connection_pool.total_connections_accepted().await,
-            bind_address: format!("{}:{}", self.config.server.bind_address, self.config.server.port),
+            bind_address: format!(
+                "{}:{}",
+                self.config.server.bind_address, self.config.server.port
+            ),
         }
     }
 
     /// Get the server's bind address
     pub fn bind_address(&self) -> String {
-        format!("{}:{}", self.config.server.bind_address, self.config.server.port)
+        format!(
+            "{}:{}",
+            self.config.server.bind_address, self.config.server.port
+        )
     }
 
     /// Check if the server is running
@@ -696,28 +777,31 @@ pub struct ServerStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{SetCommand, GetCommand};
+    use crate::commands::{GetCommand, SetCommand};
 
     async fn create_test_server() -> (TcpServer, Arc<Config>) {
         let config = Arc::new(Config::default());
         let storage = Arc::new(MemoryStore::new());
         let mut command_registry = CommandRegistry::new();
-        
+
         // Register basic commands for testing
         command_registry.register(Box::new(SetCommand));
         command_registry.register(Box::new(GetCommand));
-        
+
         let command_registry = Arc::new(command_registry);
         let server = TcpServer::new(config.clone(), storage, command_registry);
-        
+
         (server, config)
     }
 
     #[tokio::test]
     async fn test_server_creation() {
         let (server, config) = create_test_server().await;
-        
-        assert_eq!(server.bind_address(), format!("{}:{}", config.server.bind_address, config.server.port));
+
+        assert_eq!(
+            server.bind_address(),
+            format!("{}:{}", config.server.bind_address, config.server.port)
+        );
         assert!(!server.is_running());
     }
 
@@ -725,7 +809,7 @@ mod tests {
     async fn test_server_stats() {
         let (server, _) = create_test_server().await;
         let stats = server.stats().await;
-        
+
         assert_eq!(stats.active_connections, 0);
         assert_eq!(stats.max_connections, 10000);
         assert_eq!(stats.total_connections_accepted, 0);
@@ -748,7 +832,7 @@ mod tests {
             total_connections_accepted: 150,
             bind_address: "127.0.0.1:6379".to_string(),
         };
-        
+
         assert_eq!(stats.active_connections, 5);
         assert_eq!(stats.max_connections, 100);
         assert_eq!(stats.total_connections_accepted, 150);

@@ -1,12 +1,12 @@
 //! Error types and handling for RustyPotato
-//! 
+//!
 //! This module defines all error types used throughout the system,
 //! provides conversion utilities for client responses, implements
 //! structured logging, and includes error recovery mechanisms.
 
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tracing::{error, warn, debug, info, instrument, Span};
+use tracing::{debug, error, info, instrument, warn, Span};
 
 /// Error severity levels for logging and recovery decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,29 +42,27 @@ pub enum ErrorCategory {
 #[derive(Debug, Error)]
 pub enum RustyPotatoError {
     #[error("Invalid command: {command}")]
-    InvalidCommand { 
+    InvalidCommand {
         command: String,
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
-    #[error("Wrong number of arguments for command '{command}': expected {expected}, got {actual}")]
-    WrongArity { 
-        command: String, 
-        expected: String, 
+
+    #[error(
+        "Wrong number of arguments for command '{command}': expected {expected}, got {actual}"
+    )]
+    WrongArity {
+        command: String,
+        expected: String,
         actual: usize,
     },
-    
+
     #[error("Value is not an integer or out of range: {value}")]
-    NotAnInteger { 
-        value: String,
-    },
-    
+    NotAnInteger { value: String },
+
     #[error("Key not found: {key}")]
-    KeyNotFound { 
-        key: String,
-    },
-    
+    KeyNotFound { key: String },
+
     #[error("Persistence error: {message}")]
     PersistenceError {
         message: String,
@@ -72,7 +70,7 @@ pub enum RustyPotatoError {
         source: Option<std::io::Error>,
         recoverable: bool,
     },
-    
+
     #[error("Network error: {message}")]
     NetworkError {
         message: String,
@@ -80,7 +78,7 @@ pub enum RustyPotatoError {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
         connection_id: Option<String>,
     },
-    
+
     #[error("Protocol error: {message}")]
     ProtocolError {
         message: String,
@@ -88,7 +86,7 @@ pub enum RustyPotatoError {
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
+
     #[error("Configuration error: {message}")]
     ConfigError {
         message: String,
@@ -96,7 +94,7 @@ pub enum RustyPotatoError {
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
+
     #[error("Storage error: {message}")]
     StorageError {
         message: String,
@@ -104,7 +102,7 @@ pub enum RustyPotatoError {
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
+
     #[error("Connection error: {message}")]
     ConnectionError {
         message: String,
@@ -112,27 +110,27 @@ pub enum RustyPotatoError {
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
+
     #[error("Timeout error: {message}")]
     TimeoutError {
         message: String,
         operation: Option<String>,
         timeout_duration: Option<std::time::Duration>,
     },
-    
+
     #[error("Authentication error: {message}")]
     AuthenticationError {
         message: String,
         user: Option<String>,
     },
-    
+
     #[error("Authorization error: {message}")]
     AuthorizationError {
         message: String,
         user: Option<String>,
         operation: Option<String>,
     },
-    
+
     #[error("Resource exhaustion: {message}")]
     ResourceExhaustion {
         message: String,
@@ -140,14 +138,14 @@ pub enum RustyPotatoError {
         current_usage: Option<u64>,
         limit: Option<u64>,
     },
-    
+
     #[error("Serialization error: {message}")]
     SerializationError {
         message: String,
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
-    
+
     #[error("Internal error: {message}")]
     InternalError {
         message: String,
@@ -164,28 +162,28 @@ impl RustyPotatoError {
     /// Get the error severity level for logging and recovery decisions
     pub fn severity(&self) -> ErrorSeverity {
         match self {
-            RustyPotatoError::InvalidCommand { .. } 
+            RustyPotatoError::InvalidCommand { .. }
             | RustyPotatoError::WrongArity { .. }
             | RustyPotatoError::NotAnInteger { .. }
             | RustyPotatoError::KeyNotFound { .. }
             | RustyPotatoError::AuthenticationError { .. }
             | RustyPotatoError::AuthorizationError { .. } => ErrorSeverity::Low,
-            
+
             RustyPotatoError::ProtocolError { .. }
             | RustyPotatoError::TimeoutError { .. }
             | RustyPotatoError::SerializationError { .. } => ErrorSeverity::Medium,
-            
+
             RustyPotatoError::NetworkError { .. }
             | RustyPotatoError::ConnectionError { .. }
             | RustyPotatoError::ConfigError { .. }
             | RustyPotatoError::StorageError { .. } => ErrorSeverity::High,
-            
+
             RustyPotatoError::PersistenceError { .. }
             | RustyPotatoError::ResourceExhaustion { .. }
             | RustyPotatoError::InternalError { .. } => ErrorSeverity::Critical,
         }
     }
-    
+
     /// Get the error category for routing and handling
     pub fn category(&self) -> ErrorCategory {
         match self {
@@ -195,24 +193,25 @@ impl RustyPotatoError {
             | RustyPotatoError::KeyNotFound { .. }
             | RustyPotatoError::AuthenticationError { .. }
             | RustyPotatoError::AuthorizationError { .. } => ErrorCategory::Client,
-            
+
             RustyPotatoError::NetworkError { .. }
             | RustyPotatoError::ConnectionError { .. }
             | RustyPotatoError::TimeoutError { .. } => ErrorCategory::Network,
-            
-            RustyPotatoError::StorageError { .. }
-            | RustyPotatoError::PersistenceError { .. } => ErrorCategory::Storage,
-            
+
+            RustyPotatoError::StorageError { .. } | RustyPotatoError::PersistenceError { .. } => {
+                ErrorCategory::Storage
+            }
+
             RustyPotatoError::ConfigError { .. } => ErrorCategory::Configuration,
-            
+
             RustyPotatoError::ProtocolError { .. } => ErrorCategory::Protocol,
-            
+
             RustyPotatoError::ResourceExhaustion { .. }
             | RustyPotatoError::SerializationError { .. }
             | RustyPotatoError::InternalError { .. } => ErrorCategory::System,
         }
     }
-    
+
     /// Check if the error is recoverable
     pub fn is_recoverable(&self) -> bool {
         match self {
@@ -225,16 +224,22 @@ impl RustyPotatoError {
             _ => false,
         }
     }
-    
+
     /// Convert error to client-facing error message
     pub fn to_client_error(&self) -> String {
         match self {
             RustyPotatoError::InvalidCommand { command, .. } => {
                 format!("ERR unknown command '{}'", command)
             }
-            RustyPotatoError::WrongArity { command, expected, actual } => {
-                format!("ERR wrong number of arguments for '{}' command (expected {}, got {})", 
-                       command, expected, actual)
+            RustyPotatoError::WrongArity {
+                command,
+                expected,
+                actual,
+            } => {
+                format!(
+                    "ERR wrong number of arguments for '{}' command (expected {}, got {})",
+                    command, expected, actual
+                )
             }
             RustyPotatoError::NotAnInteger { value } => {
                 format!("ERR value is not an integer or out of range: {}", value)
@@ -260,12 +265,12 @@ impl RustyPotatoError {
             _ => "ERR internal server error".to_string(),
         }
     }
-    
+
     /// Check if error should be logged as warning vs error
     pub fn is_client_error(&self) -> bool {
         matches!(self.category(), ErrorCategory::Client)
     }
-    
+
     /// Log the error with appropriate level and context
     #[instrument(skip(self), fields(
         error_type = %std::any::type_name::<Self>(),
@@ -275,7 +280,7 @@ impl RustyPotatoError {
     ))]
     pub fn log(&self) {
         let span = Span::current();
-        
+
         match self.severity() {
             ErrorSeverity::Critical => {
                 error!(
@@ -309,25 +314,45 @@ impl RustyPotatoError {
                 );
             }
         }
-        
+
         // Add error-specific context
         match self {
-            RustyPotatoError::NetworkError { connection_id: Some(conn_id), .. } => {
+            RustyPotatoError::NetworkError {
+                connection_id: Some(conn_id),
+                ..
+            } => {
                 span.record("connection_id", conn_id);
             }
-            RustyPotatoError::ConnectionError { connection_id: Some(conn_id), .. } => {
+            RustyPotatoError::ConnectionError {
+                connection_id: Some(conn_id),
+                ..
+            } => {
                 span.record("connection_id", conn_id);
             }
-            RustyPotatoError::ConfigError { config_key: Some(key), .. } => {
+            RustyPotatoError::ConfigError {
+                config_key: Some(key),
+                ..
+            } => {
                 span.record("config_key", key);
             }
-            RustyPotatoError::StorageError { operation: Some(op), .. } => {
+            RustyPotatoError::StorageError {
+                operation: Some(op),
+                ..
+            } => {
                 span.record("storage_operation", op);
             }
-            RustyPotatoError::TimeoutError { timeout_duration: Some(duration), .. } => {
+            RustyPotatoError::TimeoutError {
+                timeout_duration: Some(duration),
+                ..
+            } => {
                 span.record("timeout_duration_ms", duration.as_millis() as u64);
             }
-            RustyPotatoError::ResourceExhaustion { resource_type, current_usage, limit, .. } => {
+            RustyPotatoError::ResourceExhaustion {
+                resource_type,
+                current_usage,
+                limit,
+                ..
+            } => {
                 span.record("resource_type", resource_type);
                 if let Some(usage) = current_usage {
                     span.record("current_usage", usage);
@@ -406,44 +431,48 @@ impl ErrorRecoveryManager {
     pub fn new() -> Self {
         Self::with_config(RecoveryConfig::default())
     }
-    
+
     /// Create a new error recovery manager with custom configuration
     pub fn with_config(config: RecoveryConfig) -> Self {
         Self {
             config,
-            circuit_breaker_state: std::sync::Arc::new(std::sync::RwLock::new(CircuitBreakerState {
-                failure_count: 0,
-                last_failure_time: None,
-                state: CircuitState::Closed,
-            })),
+            circuit_breaker_state: std::sync::Arc::new(std::sync::RwLock::new(
+                CircuitBreakerState {
+                    failure_count: 0,
+                    last_failure_time: None,
+                    state: CircuitState::Closed,
+                },
+            )),
         }
     }
-    
+
     /// Get the recommended recovery strategy for an error
     pub fn get_recovery_strategy(&self, error: &RustyPotatoError) -> RecoveryStrategy {
         match error {
             RustyPotatoError::NetworkError { .. }
             | RustyPotatoError::ConnectionError { .. }
             | RustyPotatoError::TimeoutError { .. } => RecoveryStrategy::Retry,
-            
-            RustyPotatoError::PersistenceError { recoverable: true, .. }
+
+            RustyPotatoError::PersistenceError {
+                recoverable: true, ..
+            }
             | RustyPotatoError::StorageError { .. } => RecoveryStrategy::Retry,
-            
+
             RustyPotatoError::ResourceExhaustion { .. } => RecoveryStrategy::Degrade,
-            
+
             RustyPotatoError::ConfigError { .. } => RecoveryStrategy::Fallback,
-            
+
             RustyPotatoError::InvalidCommand { .. }
             | RustyPotatoError::WrongArity { .. }
             | RustyPotatoError::NotAnInteger { .. }
             | RustyPotatoError::KeyNotFound { .. }
             | RustyPotatoError::AuthenticationError { .. }
             | RustyPotatoError::AuthorizationError { .. } => RecoveryStrategy::None,
-            
+
             _ => RecoveryStrategy::CircuitBreaker,
         }
     }
-    
+
     /// Execute an operation with retry logic
     #[instrument(skip(self, operation), fields(attempt = 1))]
     pub async fn retry_operation<T, F, Fut>(&self, mut operation: F) -> Result<T>
@@ -453,11 +482,11 @@ impl ErrorRecoveryManager {
     {
         let mut attempt = 1;
         let mut delay = self.config.initial_delay;
-        
+
         loop {
             let span = Span::current();
             span.record("attempt", attempt);
-            
+
             match operation().await {
                 Ok(result) => {
                     if attempt > 1 {
@@ -467,7 +496,7 @@ impl ErrorRecoveryManager {
                 }
                 Err(error) => {
                     error.log();
-                    
+
                     if attempt >= self.config.max_retries || !error.is_recoverable() {
                         error!(
                             attempts = attempt,
@@ -477,33 +506,33 @@ impl ErrorRecoveryManager {
                         );
                         return Err(error);
                     }
-                    
+
                     warn!(
                         attempt = attempt,
                         delay_ms = delay.as_millis(),
                         "Operation failed, retrying after delay"
                     );
-                    
+
                     tokio::time::sleep(delay).await;
-                    
+
                     // Exponential backoff with jitter
                     delay = std::cmp::min(
                         Duration::from_millis(
-                            (delay.as_millis() as f64 * self.config.backoff_multiplier) as u64
+                            (delay.as_millis() as f64 * self.config.backoff_multiplier) as u64,
                         ),
                         self.config.max_delay,
                     );
-                    
+
                     attempt += 1;
                 }
             }
         }
     }
-    
+
     /// Check if circuit breaker allows operation
     pub fn circuit_breaker_check(&self) -> Result<()> {
         let state = self.circuit_breaker_state.read().unwrap();
-        
+
         match state.state {
             CircuitState::Closed => Ok(()),
             CircuitState::Open => {
@@ -528,7 +557,7 @@ impl ErrorRecoveryManager {
             CircuitState::HalfOpen => Ok(()),
         }
     }
-    
+
     /// Record operation success for circuit breaker
     pub fn record_success(&self) {
         let mut state = self.circuit_breaker_state.write().unwrap();
@@ -538,13 +567,13 @@ impl ErrorRecoveryManager {
             info!("Circuit breaker closed after successful operation");
         }
     }
-    
+
     /// Record operation failure for circuit breaker
     pub fn record_failure(&self) {
         let mut state = self.circuit_breaker_state.write().unwrap();
         state.failure_count += 1;
         state.last_failure_time = Some(Instant::now());
-        
+
         if state.failure_count >= self.config.circuit_breaker_threshold {
             state.state = CircuitState::Open;
             warn!(
@@ -589,7 +618,9 @@ macro_rules! handle_error {
 #[macro_export]
 macro_rules! retry_operation {
     ($recovery_manager:expr, $operation:expr) => {
-        $recovery_manager.retry_operation(|| async { $operation }).await
+        $recovery_manager
+            .retry_operation(|| async { $operation })
+            .await
     };
 }
 

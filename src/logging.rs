@@ -1,5 +1,5 @@
 //! Structured logging infrastructure for RustyPotato
-//! 
+//!
 //! This module provides comprehensive logging setup with tracing subscriber,
 //! structured output formats, log rotation integration, and performance monitoring.
 
@@ -9,7 +9,7 @@ use crate::monitoring::LogRotationManager;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{info, warn, error, Level};
+use tracing::{error, info, warn, Level};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan, time::ChronoUtc},
     layer::SubscriberExt,
@@ -35,7 +35,10 @@ impl LoggingSystem {
 
     /// Initialize the logging system with tracing subscriber
     pub async fn initialize(&mut self) -> Result<()> {
-        info!("Initializing logging system with level: {}", self.config.logging.level);
+        info!(
+            "Initializing logging system with level: {}",
+            self.config.logging.level
+        );
 
         // Parse log level
         let log_level = self.parse_log_level(&self.config.logging.level)?;
@@ -54,7 +57,7 @@ impl LoggingSystem {
                 log_file_path: log_file_path.clone(),
                 rotation_policy: crate::monitoring::RotationPolicy::SizeOrDaily {
                     size_bytes: 100 * 1024 * 1024, // 100MB
-                    hour: 0, // Midnight
+                    hour: 0,                       // Midnight
                 },
                 max_files: 7,
                 compress: true,
@@ -75,13 +78,15 @@ impl LoggingSystem {
                 self.setup_json_console_logging(env_filter).await?;
             }
             (LogFormat::Pretty, Some(file_path)) => {
-                self.setup_pretty_file_logging(env_filter, file_path).await?;
+                self.setup_pretty_file_logging(env_filter, file_path)
+                    .await?;
             }
             (LogFormat::Pretty, None) => {
                 self.setup_pretty_console_logging(env_filter).await?;
             }
             (LogFormat::Compact, Some(file_path)) => {
-                self.setup_compact_file_logging(env_filter, file_path).await?;
+                self.setup_compact_file_logging(env_filter, file_path)
+                    .await?;
             }
             (LogFormat::Compact, None) => {
                 self.setup_compact_console_logging(env_filter).await?;
@@ -115,23 +120,24 @@ impl LoggingSystem {
 
     /// Set up JSON format logging to console
     async fn setup_json_console_logging(&self, env_filter: EnvFilter) -> Result<()> {
-        let subscriber = Registry::default()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .json()
-                    .with_current_span(false)
-                    .with_span_list(true)
-                    .with_timer(ChronoUtc::rfc_3339())
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .with_file(true)
-                    .with_line_number(true)
-            );
+        let subscriber = Registry::default().with(env_filter).with(
+            fmt::layer()
+                .json()
+                .with_current_span(false)
+                .with_span_list(true)
+                .with_timer(ChronoUtc::rfc_3339())
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .with_file(true)
+                .with_line_number(true),
+        );
 
         if let Err(e) = subscriber.try_init() {
-            warn!("Failed to initialize tracing subscriber (may already be set): {}", e);
+            warn!(
+                "Failed to initialize tracing subscriber (may already be set): {}",
+                e
+            );
         }
         Ok(())
     }
@@ -140,12 +146,13 @@ impl LoggingSystem {
     async fn setup_json_file_logging(&self, env_filter: EnvFilter, file_path: &Path) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = file_path.parent() {
-            tokio::fs::create_dir_all(parent).await
-                .map_err(|e| RustyPotatoError::InternalError {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                RustyPotatoError::InternalError {
                     message: format!("Failed to create log directory: {}", e),
                     component: Some("logging".to_string()),
                     source: Some(Box::new(e)),
-                })?;
+                }
+            })?;
         }
 
         let file = std::fs::OpenOptions::new()
@@ -158,60 +165,67 @@ impl LoggingSystem {
                 source: Some(Box::new(e)),
             })?;
 
-        let subscriber = Registry::default()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .json()
-                    .with_writer(Arc::new(file))
-                    .with_current_span(false)
-                    .with_span_list(true)
-                    .with_timer(ChronoUtc::rfc_3339())
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .with_file(true)
-                    .with_line_number(true)
-            );
+        let subscriber = Registry::default().with(env_filter).with(
+            fmt::layer()
+                .json()
+                .with_writer(Arc::new(file))
+                .with_current_span(false)
+                .with_span_list(true)
+                .with_timer(ChronoUtc::rfc_3339())
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .with_file(true)
+                .with_line_number(true),
+        );
 
         if let Err(e) = subscriber.try_init() {
-            warn!("Failed to initialize tracing subscriber (may already be set): {}", e);
+            warn!(
+                "Failed to initialize tracing subscriber (may already be set): {}",
+                e
+            );
         }
         Ok(())
     }
 
     /// Set up pretty format logging to console
     async fn setup_pretty_console_logging(&self, env_filter: EnvFilter) -> Result<()> {
-        let subscriber = Registry::default()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .pretty()
-                    .with_timer(ChronoUtc::rfc_3339())
-                    .with_target(true)
-                    .with_thread_ids(false)
-                    .with_thread_names(false)
-                    .with_file(false)
-                    .with_line_number(false)
-                    .with_span_events(FmtSpan::CLOSE)
-            );
+        let subscriber = Registry::default().with(env_filter).with(
+            fmt::layer()
+                .pretty()
+                .with_timer(ChronoUtc::rfc_3339())
+                .with_target(true)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_file(false)
+                .with_line_number(false)
+                .with_span_events(FmtSpan::CLOSE),
+        );
 
         if let Err(e) = subscriber.try_init() {
-            warn!("Failed to initialize tracing subscriber (may already be set): {}", e);
+            warn!(
+                "Failed to initialize tracing subscriber (may already be set): {}",
+                e
+            );
         }
         Ok(())
     }
 
     /// Set up pretty format logging to file
-    async fn setup_pretty_file_logging(&self, env_filter: EnvFilter, file_path: &Path) -> Result<()> {
+    async fn setup_pretty_file_logging(
+        &self,
+        env_filter: EnvFilter,
+        file_path: &Path,
+    ) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = file_path.parent() {
-            tokio::fs::create_dir_all(parent).await
-                .map_err(|e| RustyPotatoError::InternalError {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                RustyPotatoError::InternalError {
                     message: format!("Failed to create log directory: {}", e),
                     component: Some("logging".to_string()),
                     source: Some(Box::new(e)),
-                })?;
+                }
+            })?;
         }
 
         let file = std::fs::OpenOptions::new()
@@ -224,57 +238,64 @@ impl LoggingSystem {
                 source: Some(Box::new(e)),
             })?;
 
-        let subscriber = Registry::default()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .with_writer(Arc::new(file))
-                    .with_timer(ChronoUtc::rfc_3339())
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .with_file(true)
-                    .with_line_number(true)
-                    .with_span_events(FmtSpan::CLOSE)
-            );
+        let subscriber = Registry::default().with(env_filter).with(
+            fmt::layer()
+                .with_writer(Arc::new(file))
+                .with_timer(ChronoUtc::rfc_3339())
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .with_file(true)
+                .with_line_number(true)
+                .with_span_events(FmtSpan::CLOSE),
+        );
 
         if let Err(e) = subscriber.try_init() {
-            warn!("Failed to initialize tracing subscriber (may already be set): {}", e);
+            warn!(
+                "Failed to initialize tracing subscriber (may already be set): {}",
+                e
+            );
         }
         Ok(())
     }
 
     /// Set up compact format logging to console
     async fn setup_compact_console_logging(&self, env_filter: EnvFilter) -> Result<()> {
-        let subscriber = Registry::default()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .compact()
-                    .with_timer(ChronoUtc::rfc_3339())
-                    .with_target(false)
-                    .with_thread_ids(false)
-                    .with_thread_names(false)
-                    .with_file(false)
-                    .with_line_number(false)
-            );
+        let subscriber = Registry::default().with(env_filter).with(
+            fmt::layer()
+                .compact()
+                .with_timer(ChronoUtc::rfc_3339())
+                .with_target(false)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_file(false)
+                .with_line_number(false),
+        );
 
         if let Err(e) = subscriber.try_init() {
-            warn!("Failed to initialize tracing subscriber (may already be set): {}", e);
+            warn!(
+                "Failed to initialize tracing subscriber (may already be set): {}",
+                e
+            );
         }
         Ok(())
     }
 
     /// Set up compact format logging to file
-    async fn setup_compact_file_logging(&self, env_filter: EnvFilter, file_path: &Path) -> Result<()> {
+    async fn setup_compact_file_logging(
+        &self,
+        env_filter: EnvFilter,
+        file_path: &Path,
+    ) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = file_path.parent() {
-            tokio::fs::create_dir_all(parent).await
-                .map_err(|e| RustyPotatoError::InternalError {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                RustyPotatoError::InternalError {
                     message: format!("Failed to create log directory: {}", e),
                     component: Some("logging".to_string()),
                     source: Some(Box::new(e)),
-                })?;
+                }
+            })?;
         }
 
         let file = std::fs::OpenOptions::new()
@@ -287,22 +308,23 @@ impl LoggingSystem {
                 source: Some(Box::new(e)),
             })?;
 
-        let subscriber = Registry::default()
-            .with(env_filter)
-            .with(
-                fmt::layer()
-                    .compact()
-                    .with_writer(Arc::new(file))
-                    .with_timer(ChronoUtc::rfc_3339())
-                    .with_target(true)
-                    .with_thread_ids(false)
-                    .with_thread_names(false)
-                    .with_file(false)
-                    .with_line_number(false)
-            );
+        let subscriber = Registry::default().with(env_filter).with(
+            fmt::layer()
+                .compact()
+                .with_writer(Arc::new(file))
+                .with_timer(ChronoUtc::rfc_3339())
+                .with_target(true)
+                .with_thread_ids(false)
+                .with_thread_names(false)
+                .with_file(false)
+                .with_line_number(false),
+        );
 
         if let Err(e) = subscriber.try_init() {
-            warn!("Failed to initialize tracing subscriber (may already be set): {}", e);
+            warn!(
+                "Failed to initialize tracing subscriber (may already be set): {}",
+                e
+            );
         }
         Ok(())
     }
@@ -321,17 +343,17 @@ impl LoggingSystem {
     /// Shutdown the logging system gracefully
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down logging system");
-        
+
         // Flush any pending logs
         self.flush().await?;
-        
+
         // If we have log rotation, we might want to do a final rotation
         if let Some(log_rotation) = &self.log_rotation {
             // Optionally trigger a final rotation on shutdown
             // log_rotation.rotate_now().await?;
             let _status = log_rotation.get_status().await;
         }
-        
+
         info!("Logging system shutdown complete");
         Ok(())
     }
@@ -384,13 +406,13 @@ impl<W: Write> MetricsWriter<W> {
 impl<W: Write> Write for MetricsWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let result = self.inner.write(buf);
-        
+
         if let Ok(bytes_written) = result {
             let mut metrics = self.metrics.lock().unwrap();
             metrics.total_log_messages += 1;
             metrics.log_file_size_bytes += bytes_written as u64;
         }
-        
+
         result
     }
 
@@ -433,16 +455,37 @@ mod tests {
         let config = Config::default();
         let logging_system = LoggingSystem::new(config);
 
-        assert!(matches!(logging_system.parse_log_level("trace"), Ok(Level::TRACE)));
-        assert!(matches!(logging_system.parse_log_level("debug"), Ok(Level::DEBUG)));
-        assert!(matches!(logging_system.parse_log_level("info"), Ok(Level::INFO)));
-        assert!(matches!(logging_system.parse_log_level("warn"), Ok(Level::WARN)));
-        assert!(matches!(logging_system.parse_log_level("error"), Ok(Level::ERROR)));
-        
+        assert!(matches!(
+            logging_system.parse_log_level("trace"),
+            Ok(Level::TRACE)
+        ));
+        assert!(matches!(
+            logging_system.parse_log_level("debug"),
+            Ok(Level::DEBUG)
+        ));
+        assert!(matches!(
+            logging_system.parse_log_level("info"),
+            Ok(Level::INFO)
+        ));
+        assert!(matches!(
+            logging_system.parse_log_level("warn"),
+            Ok(Level::WARN)
+        ));
+        assert!(matches!(
+            logging_system.parse_log_level("error"),
+            Ok(Level::ERROR)
+        ));
+
         // Test case insensitive
-        assert!(matches!(logging_system.parse_log_level("INFO"), Ok(Level::INFO)));
-        assert!(matches!(logging_system.parse_log_level("Error"), Ok(Level::ERROR)));
-        
+        assert!(matches!(
+            logging_system.parse_log_level("INFO"),
+            Ok(Level::INFO)
+        ));
+        assert!(matches!(
+            logging_system.parse_log_level("Error"),
+            Ok(Level::ERROR)
+        ));
+
         // Test invalid level
         assert!(logging_system.parse_log_level("invalid").is_err());
     }
@@ -451,7 +494,7 @@ mod tests {
     async fn test_logging_system_creation() {
         let config = Config::default();
         let logging_system = LoggingSystem::new(config);
-        
+
         assert!(logging_system.log_rotation.is_none());
     }
 
@@ -466,10 +509,10 @@ mod tests {
     async fn test_logging_health_check_file() {
         let temp_dir = TempDir::new().unwrap();
         let log_path = temp_dir.path().join("test.log");
-        
+
         let mut config = Config::default();
         config.logging.file_path = Some(log_path);
-        
+
         let health = check_logging_health(&config).await.unwrap();
         assert!(health);
     }
@@ -478,7 +521,7 @@ mod tests {
     async fn test_logging_health_check_invalid_file() {
         let mut config = Config::default();
         config.logging.file_path = Some(PathBuf::from("/invalid/path/test.log"));
-        
+
         let health = check_logging_health(&config).await.unwrap();
         assert!(!health);
     }
@@ -487,21 +530,21 @@ mod tests {
     fn test_metrics_writer() {
         let mut buffer = Vec::new();
         let mut writer = MetricsWriter::new(&mut buffer);
-        
+
         writer.write_all(b"test log message\n").unwrap();
         writer.flush().unwrap();
-        
+
         let metrics = writer.get_metrics();
         assert_eq!(metrics.total_log_messages, 1);
         assert_eq!(metrics.log_file_size_bytes, 17); // "test log message\n".len()
-        
+
         assert_eq!(buffer, b"test log message\n");
     }
 
     #[test]
     fn test_logging_metrics_default() {
         let metrics = LoggingMetrics::default();
-        
+
         assert_eq!(metrics.total_log_messages, 0);
         assert!(metrics.log_messages_by_level.is_empty());
         assert_eq!(metrics.log_file_size_bytes, 0);
@@ -515,12 +558,14 @@ mod tests {
         let mut metrics = LoggingMetrics::default();
         metrics.total_log_messages = 100;
         metrics.log_messages_by_level.insert("info".to_string(), 80);
-        metrics.log_messages_by_level.insert("error".to_string(), 20);
+        metrics
+            .log_messages_by_level
+            .insert("error".to_string(), 20);
         metrics.log_file_size_bytes = 1024;
-        
+
         let json = serde_json::to_string(&metrics).unwrap();
         let deserialized: LoggingMetrics = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.total_log_messages, 100);
         assert_eq!(deserialized.log_messages_by_level.get("info"), Some(&80));
         assert_eq!(deserialized.log_messages_by_level.get("error"), Some(&20));

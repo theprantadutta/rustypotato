@@ -1,10 +1,10 @@
 //! Persistence layer with AOF (Append-Only File) support
-//! 
+//!
 //! This module provides append-only file persistence for RustyPotato,
 //! ensuring data durability and recovery capabilities.
 
 use crate::config::{Config, FsyncPolicy};
-use crate::error::{RustyPotatoError, Result};
+use crate::error::{Result, RustyPotatoError};
 use crate::storage::ValueType;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -24,10 +24,22 @@ pub struct AofEntry {
 /// Commands that can be persisted to AOF
 #[derive(Debug, Clone)]
 pub enum AofCommand {
-    Set { key: String, value: ValueType },
-    SetWithExpiration { key: String, value: ValueType, expires_at: u64 },
-    Delete { key: String },
-    Expire { key: String, expires_at: u64 },
+    Set {
+        key: String,
+        value: ValueType,
+    },
+    SetWithExpiration {
+        key: String,
+        value: ValueType,
+        expires_at: u64,
+    },
+    Delete {
+        key: String,
+    },
+    Expire {
+        key: String,
+        expires_at: u64,
+    },
 }
 
 /// AOF writer for append-only file operations with batched writes
@@ -60,58 +72,58 @@ impl AofWriter {
             max_batch_size: 1000,
             max_buffer_size: 1024 * 1024, // 1MB max buffer
         };
-        
+
         if config.storage.aof_enabled {
             writer.open_file().await?;
         }
-        
+
         Ok(writer)
     }
-    
+
     /// Open the AOF file for writing
     async fn open_file(&mut self) -> Result<()> {
         // Create parent directories if they don't exist
         if let Some(parent) = self.file_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.file_path)
             .await?;
-            
+
         self.file = Some(file);
         info!("AOF file opened: {:?}", self.file_path);
         Ok(())
     }
-    
+
     /// Write an AOF entry to the batch buffer
     pub async fn write_entry(&mut self, entry: AofEntry) -> Result<()> {
         if self.file.is_none() {
             return Ok(()); // AOF disabled
         }
-        
+
         self.batch_buffer.push(entry);
         self.pending_writes += 1;
-        
+
         // Check if we need to flush based on batch size or policy
         let should_flush = match self.fsync_policy {
             FsyncPolicy::Always => true,
             FsyncPolicy::EverySecond => {
-                self.batch_buffer.len() >= self.max_batch_size ||
-                self.last_flush.elapsed() >= self.flush_interval
+                self.batch_buffer.len() >= self.max_batch_size
+                    || self.last_flush.elapsed() >= self.flush_interval
             }
             FsyncPolicy::Never => {
-                self.batch_buffer.len() >= self.max_batch_size ||
-                self.buffer.len() > self.max_buffer_size
+                self.batch_buffer.len() >= self.max_batch_size
+                    || self.buffer.len() > self.max_buffer_size
             }
         };
-        
+
         if should_flush {
             self.flush_batch().await?;
         }
-        
+
         Ok(())
     }
 
@@ -126,7 +138,7 @@ impl AofWriter {
             let serialized = self.serialize_entry(entry)?;
             self.buffer.extend_from_slice(&serialized);
         }
-        
+
         self.batch_buffer.clear();
 
         // Flush to disk based on policy (avoid recursion by calling flush_to_disk directly)
@@ -148,7 +160,7 @@ impl AofWriter {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -158,21 +170,24 @@ impl AofWriter {
             if !self.buffer.is_empty() {
                 file.write_all(&self.buffer).await?;
                 file.flush().await?;
-                
+
                 if sync {
                     file.sync_all().await?;
                 }
-                
+
                 self.buffer.clear();
                 self.last_flush = Instant::now();
-                
-                debug!("Flushed {} pending writes to AOF (sync: {})", self.pending_writes, sync);
+
+                debug!(
+                    "Flushed {} pending writes to AOF (sync: {})",
+                    self.pending_writes, sync
+                );
                 self.pending_writes = 0;
             }
         }
         Ok(())
     }
-    
+
     /// Flush buffer to disk
     pub async fn flush(&mut self) -> Result<()> {
         // First serialize any pending batch entries without recursive flush
@@ -187,7 +202,7 @@ impl AofWriter {
         // Now flush to disk with sync
         self.flush_to_disk(true).await
     }
-    
+
     /// Flush buffer without syncing to disk
     async fn flush_buffer_only(&mut self) -> Result<()> {
         // First serialize any pending batch entries
@@ -202,11 +217,11 @@ impl AofWriter {
         // Flush to disk without sync
         self.flush_to_disk(false).await
     }
-    
+
     /// Serialize an AOF entry to bytes
     fn serialize_entry(&self, entry: &AofEntry) -> Result<Vec<u8>> {
         let mut result = Vec::new();
-        
+
         // Format: TIMESTAMP COMMAND ARGS...
         match &entry.command {
             AofCommand::Set { key, value } => {
@@ -214,9 +229,16 @@ impl AofWriter {
                 let line = format!("{} SET {} {}\n", entry.timestamp, key, value_str);
                 result.extend_from_slice(line.as_bytes());
             }
-            AofCommand::SetWithExpiration { key, value, expires_at } => {
+            AofCommand::SetWithExpiration {
+                key,
+                value,
+                expires_at,
+            } => {
                 let value_str = value.to_string();
-                let line = format!("{} SETEX {} {} {}\n", entry.timestamp, key, expires_at, value_str);
+                let line = format!(
+                    "{} SETEX {} {} {}\n",
+                    entry.timestamp, key, expires_at, value_str
+                );
                 result.extend_from_slice(line.as_bytes());
             }
             AofCommand::Delete { key } => {
@@ -228,10 +250,10 @@ impl AofWriter {
                 result.extend_from_slice(line.as_bytes());
             }
         }
-        
+
         Ok(result)
     }
-    
+
     /// Get current file size
     pub async fn file_size(&self) -> Result<u64> {
         if let Some(ref file) = self.file {
@@ -241,7 +263,7 @@ impl AofWriter {
             Ok(0)
         }
     }
-    
+
     /// Close the AOF file
     pub async fn close(&mut self) -> Result<()> {
         if self.file.is_some() {
@@ -264,138 +286,183 @@ impl RecoveryHandler {
     pub fn new(file_path: PathBuf) -> Self {
         Self { file_path }
     }
-    
+
     /// Recover data from AOF file
     pub async fn recover(&self) -> Result<Vec<AofEntry>> {
         if !self.file_path.exists() {
-            info!("No AOF file found at {:?}, starting with empty database", self.file_path);
+            info!(
+                "No AOF file found at {:?}, starting with empty database",
+                self.file_path
+            );
             return Ok(Vec::new());
         }
-        
+
         info!("Starting AOF recovery from {:?}", self.file_path);
         let start_time = Instant::now();
-        
+
         let file = File::open(&self.file_path).await?;
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
         let mut entries = Vec::new();
         let mut line_number = 0;
-        
+
         while let Some(line) = lines.next_line().await? {
             line_number += 1;
-            
+
             if line.trim().is_empty() {
                 continue; // Skip empty lines
             }
-            
+
             match self.parse_aof_line(&line) {
                 Ok(entry) => entries.push(entry),
                 Err(e) => {
-                    warn!("Failed to parse AOF line {}: {} - Error: {}", line_number, line, e);
+                    warn!(
+                        "Failed to parse AOF line {}: {} - Error: {}",
+                        line_number, line, e
+                    );
                     // Continue recovery, don't fail on single line errors
                 }
             }
         }
-        
+
         let recovery_time = start_time.elapsed();
-        info!("AOF recovery completed: {} entries loaded in {:?}", entries.len(), recovery_time);
-        
+        info!(
+            "AOF recovery completed: {} entries loaded in {:?}",
+            entries.len(),
+            recovery_time
+        );
+
         Ok(entries)
     }
-    
+
     /// Parse a single AOF line into an entry
     fn parse_aof_line(&self, line: &str) -> Result<AofEntry> {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        
+
         if parts.len() < 2 {
             return Err(RustyPotatoError::PersistenceError {
                 message: "Invalid AOF line format".to_string(),
-                source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid AOF line format")),
+                source: Some(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid AOF line format",
+                )),
                 recoverable: false,
             });
         }
-        
-        let timestamp = parts[0].parse::<u64>()
-            .map_err(|_| RustyPotatoError::PersistenceError {
-                message: "Invalid timestamp".to_string(),
-                source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid timestamp")),
-                recoverable: false,
-            })?;
-            
-        let command = match parts[1] {
-            "SET" => {
-                if parts.len() < 4 {
-                    return Err(RustyPotatoError::PersistenceError {
-                        message: "Invalid SET command".to_string(),
-                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SET command")),
-                        recoverable: false,
-                    });
-                }
-                let key = parts[2].to_string();
-                let value_str = parts[3..].join(" "); // Handle values with spaces
-                let value = self.parse_value(&value_str);
-                AofCommand::Set { key, value }
-            }
-            "SETEX" => {
-                if parts.len() < 5 {
-                    return Err(RustyPotatoError::PersistenceError {
-                        message: "Invalid SETEX command".to_string(),
-                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid SETEX command")),
-                        recoverable: false,
-                    });
-                }
-                let key = parts[2].to_string();
-                let expires_at = parts[3].parse::<u64>()
-                    .map_err(|_| RustyPotatoError::PersistenceError {
-                        message: "Invalid expiration timestamp".to_string(),
-                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid expiration timestamp")),
-                        recoverable: false,
-                    })?;
-                let value_str = parts[4..].join(" ");
-                let value = self.parse_value(&value_str);
-                AofCommand::SetWithExpiration { key, value, expires_at }
-            }
-            "DEL" => {
-                if parts.len() < 3 {
-                    return Err(RustyPotatoError::PersistenceError {
-                        message: "Invalid DEL command".to_string(),
-                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid DEL command")),
-                        recoverable: false,
-                    });
-                }
-                let key = parts[2].to_string();
-                AofCommand::Delete { key }
-            }
-            "EXPIREAT" => {
-                if parts.len() < 4 {
-                    return Err(RustyPotatoError::PersistenceError {
-                        message: "Invalid EXPIREAT command".to_string(),
-                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid EXPIREAT command")),
-                        recoverable: false,
-                    });
-                }
-                let key = parts[2].to_string();
-                let expires_at = parts[3].parse::<u64>()
-                    .map_err(|_| RustyPotatoError::PersistenceError {
-                        message: "Invalid expiration timestamp".to_string(),
-                        source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid expiration timestamp")),
-                        recoverable: false,
-                    })?;
-                AofCommand::Expire { key, expires_at }
-            }
-            _ => {
-                return Err(RustyPotatoError::PersistenceError {
-                    message: format!("Unknown AOF command: {}", parts[1]),
-                    source: Some(std::io::Error::new(std::io::ErrorKind::InvalidData, 
-                                       format!("Unknown AOF command: {}", parts[1]))),
+
+        let timestamp =
+            parts[0]
+                .parse::<u64>()
+                .map_err(|_| RustyPotatoError::PersistenceError {
+                    message: "Invalid timestamp".to_string(),
+                    source: Some(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid timestamp",
+                    )),
                     recoverable: false,
-                });
-            }
-        };
-        
+                })?;
+
+        let command =
+            match parts[1] {
+                "SET" => {
+                    if parts.len() < 4 {
+                        return Err(RustyPotatoError::PersistenceError {
+                            message: "Invalid SET command".to_string(),
+                            source: Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid SET command",
+                            )),
+                            recoverable: false,
+                        });
+                    }
+                    let key = parts[2].to_string();
+                    let value_str = parts[3..].join(" "); // Handle values with spaces
+                    let value = self.parse_value(&value_str);
+                    AofCommand::Set { key, value }
+                }
+                "SETEX" => {
+                    if parts.len() < 5 {
+                        return Err(RustyPotatoError::PersistenceError {
+                            message: "Invalid SETEX command".to_string(),
+                            source: Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid SETEX command",
+                            )),
+                            recoverable: false,
+                        });
+                    }
+                    let key = parts[2].to_string();
+                    let expires_at = parts[3].parse::<u64>().map_err(|_| {
+                        RustyPotatoError::PersistenceError {
+                            message: "Invalid expiration timestamp".to_string(),
+                            source: Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid expiration timestamp",
+                            )),
+                            recoverable: false,
+                        }
+                    })?;
+                    let value_str = parts[4..].join(" ");
+                    let value = self.parse_value(&value_str);
+                    AofCommand::SetWithExpiration {
+                        key,
+                        value,
+                        expires_at,
+                    }
+                }
+                "DEL" => {
+                    if parts.len() < 3 {
+                        return Err(RustyPotatoError::PersistenceError {
+                            message: "Invalid DEL command".to_string(),
+                            source: Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid DEL command",
+                            )),
+                            recoverable: false,
+                        });
+                    }
+                    let key = parts[2].to_string();
+                    AofCommand::Delete { key }
+                }
+                "EXPIREAT" => {
+                    if parts.len() < 4 {
+                        return Err(RustyPotatoError::PersistenceError {
+                            message: "Invalid EXPIREAT command".to_string(),
+                            source: Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid EXPIREAT command",
+                            )),
+                            recoverable: false,
+                        });
+                    }
+                    let key = parts[2].to_string();
+                    let expires_at = parts[3].parse::<u64>().map_err(|_| {
+                        RustyPotatoError::PersistenceError {
+                            message: "Invalid expiration timestamp".to_string(),
+                            source: Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid expiration timestamp",
+                            )),
+                            recoverable: false,
+                        }
+                    })?;
+                    AofCommand::Expire { key, expires_at }
+                }
+                _ => {
+                    return Err(RustyPotatoError::PersistenceError {
+                        message: format!("Unknown AOF command: {}", parts[1]),
+                        source: Some(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Unknown AOF command: {}", parts[1]),
+                        )),
+                        recoverable: false,
+                    });
+                }
+            };
+
         Ok(AofEntry { timestamp, command })
     }
-    
+
     /// Parse a value string into ValueType
     fn parse_value(&self, value_str: &str) -> ValueType {
         // Try to parse as integer first
@@ -424,9 +491,9 @@ impl PersistenceManager {
         } else {
             None
         };
-        
+
         let recovery_handler = RecoveryHandler::new(config.storage.aof_path.clone());
-        
+
         let (write_sender, background_task) = if config.storage.aof_enabled {
             let (sender, receiver) = mpsc::unbounded_channel();
             let task = Self::start_background_writer(receiver, config.clone()).await?;
@@ -434,7 +501,7 @@ impl PersistenceManager {
         } else {
             (None, None)
         };
-        
+
         Ok(Self {
             aof_writer,
             recovery_handler,
@@ -442,7 +509,7 @@ impl PersistenceManager {
             _background_task: background_task,
         })
     }
-    
+
     /// Start background writer task for async AOF writing
     async fn start_background_writer(
         mut receiver: mpsc::UnboundedReceiver<AofEntry>,
@@ -450,7 +517,7 @@ impl PersistenceManager {
     ) -> Result<tokio::task::JoinHandle<()>> {
         let mut writer = AofWriter::new(&config).await?;
         let mut flush_interval = interval(Duration::from_secs(1));
-        
+
         let handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -477,16 +544,16 @@ impl PersistenceManager {
                     }
                 }
             }
-            
+
             // Final cleanup
             if let Err(e) = writer.close().await {
                 error!("Failed to close AOF writer: {}", e);
             }
         });
-        
+
         Ok(handle)
     }
-    
+
     /// Log a SET operation to AOF
     pub async fn log_set(&self, key: String, value: ValueType) -> Result<()> {
         if let Some(ref sender) = self.write_sender {
@@ -494,36 +561,53 @@ impl PersistenceManager {
                 timestamp: current_timestamp(),
                 command: AofCommand::Set { key, value },
             };
-            
-            sender.send(entry)
+
+            sender
+                .send(entry)
                 .map_err(|_| RustyPotatoError::PersistenceError {
                     message: "AOF writer channel closed".to_string(),
-                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    source: Some(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "AOF writer channel closed",
+                    )),
                     recoverable: true,
                 })?;
         }
         Ok(())
     }
-    
+
     /// Log a SET operation with expiration to AOF
-    pub async fn log_set_with_expiration(&self, key: String, value: ValueType, expires_at: Instant) -> Result<()> {
+    pub async fn log_set_with_expiration(
+        &self,
+        key: String,
+        value: ValueType,
+        expires_at: Instant,
+    ) -> Result<()> {
         if let Some(ref sender) = self.write_sender {
             let expires_at_timestamp = instant_to_timestamp(expires_at);
             let entry = AofEntry {
                 timestamp: current_timestamp(),
-                command: AofCommand::SetWithExpiration { key, value, expires_at: expires_at_timestamp },
+                command: AofCommand::SetWithExpiration {
+                    key,
+                    value,
+                    expires_at: expires_at_timestamp,
+                },
             };
-            
-            sender.send(entry)
+
+            sender
+                .send(entry)
                 .map_err(|_| RustyPotatoError::PersistenceError {
                     message: "AOF writer channel closed".to_string(),
-                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    source: Some(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "AOF writer channel closed",
+                    )),
                     recoverable: true,
                 })?;
         }
         Ok(())
     }
-    
+
     /// Log a DELETE operation to AOF
     pub async fn log_delete(&self, key: String) -> Result<()> {
         if let Some(ref sender) = self.write_sender {
@@ -531,41 +615,52 @@ impl PersistenceManager {
                 timestamp: current_timestamp(),
                 command: AofCommand::Delete { key },
             };
-            
-            sender.send(entry)
+
+            sender
+                .send(entry)
                 .map_err(|_| RustyPotatoError::PersistenceError {
                     message: "AOF writer channel closed".to_string(),
-                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    source: Some(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "AOF writer channel closed",
+                    )),
                     recoverable: true,
                 })?;
         }
         Ok(())
     }
-    
+
     /// Log an EXPIRE operation to AOF
     pub async fn log_expire(&self, key: String, expires_at: Instant) -> Result<()> {
         if let Some(ref sender) = self.write_sender {
             let expires_at_timestamp = instant_to_timestamp(expires_at);
             let entry = AofEntry {
                 timestamp: current_timestamp(),
-                command: AofCommand::Expire { key, expires_at: expires_at_timestamp },
+                command: AofCommand::Expire {
+                    key,
+                    expires_at: expires_at_timestamp,
+                },
             };
-            
-            sender.send(entry)
+
+            sender
+                .send(entry)
                 .map_err(|_| RustyPotatoError::PersistenceError {
                     message: "AOF writer channel closed".to_string(),
-                    source: Some(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "AOF writer channel closed")),
+                    source: Some(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "AOF writer channel closed",
+                    )),
                     recoverable: true,
                 })?;
         }
         Ok(())
     }
-    
+
     /// Recover data from AOF file
     pub async fn recover(&self) -> Result<Vec<AofEntry>> {
         self.recovery_handler.recover().await
     }
-    
+
     /// Force flush of pending writes
     pub async fn flush(&mut self) -> Result<()> {
         if let Some(ref mut writer) = self.aof_writer {
@@ -573,7 +668,7 @@ impl PersistenceManager {
         }
         Ok(())
     }
-    
+
     /// Get AOF file size
     pub async fn file_size(&self) -> Result<u64> {
         if let Some(ref writer) = self.aof_writer {
@@ -582,7 +677,7 @@ impl PersistenceManager {
             Ok(0)
         }
     }
-    
+
     /// Check if AOF is enabled
     pub fn is_enabled(&self) -> bool {
         self.aof_writer.is_some()
@@ -601,7 +696,7 @@ fn current_timestamp() -> u64 {
 fn instant_to_timestamp(instant: Instant) -> u64 {
     let now = Instant::now();
     let system_now = SystemTime::now();
-    
+
     if instant > now {
         // Future time
         let duration_from_now = instant - now;
@@ -628,10 +723,12 @@ fn timestamp_to_instant(timestamp: u64) -> Instant {
     let now = Instant::now();
     let system_now = SystemTime::now();
     let target_system_time = UNIX_EPOCH + Duration::from_secs(timestamp);
-    
+
     if target_system_time > system_now {
         // Future time
-        let duration_from_now = target_system_time.duration_since(system_now).unwrap_or_default();
+        let duration_from_now = target_system_time
+            .duration_since(system_now)
+            .unwrap_or_default();
         now + duration_from_now
     } else {
         // Past time (treat as expired)
@@ -646,7 +743,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
     use tokio::time::sleep;
-    
+
     fn create_test_config(aof_path: PathBuf) -> Config {
         let mut config = Config::default();
         config.storage = StorageConfig {
@@ -657,25 +754,25 @@ mod tests {
         };
         config
     }
-    
+
     #[tokio::test]
     async fn test_aof_writer_creation() {
         let temp_dir = tempdir().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
         let config = create_test_config(aof_path);
-        
+
         let writer = AofWriter::new(&config).await;
         assert!(writer.is_ok());
     }
-    
+
     #[tokio::test]
     async fn test_aof_entry_serialization() {
         let temp_dir = tempdir().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
         let config = create_test_config(aof_path);
-        
+
         let mut writer = AofWriter::new(&config).await.unwrap();
-        
+
         let entry = AofEntry {
             timestamp: 1234567890,
             command: AofCommand::Set {
@@ -683,25 +780,25 @@ mod tests {
                 value: ValueType::String("test_value".to_string()),
             },
         };
-        
+
         writer.write_entry(entry).await.unwrap();
         writer.flush().await.unwrap();
-        
+
         // Verify file was written
         let file_size = writer.file_size().await.unwrap();
         assert!(file_size > 0);
     }
-    
+
     #[tokio::test]
     async fn test_aof_recovery() {
         let temp_dir = tempdir().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
         let config = create_test_config(aof_path.clone());
-        
+
         // Write some entries
         {
             let mut writer = AofWriter::new(&config).await.unwrap();
-            
+
             let entries = vec![
                 AofEntry {
                     timestamp: 1234567890,
@@ -724,19 +821,19 @@ mod tests {
                     },
                 },
             ];
-            
+
             for entry in entries {
                 writer.write_entry(entry).await.unwrap();
             }
             writer.flush().await.unwrap();
         }
-        
+
         // Recover entries
         let recovery_handler = RecoveryHandler::new(aof_path);
         let recovered_entries = recovery_handler.recover().await.unwrap();
-        
+
         assert_eq!(recovered_entries.len(), 3);
-        
+
         // Verify first entry
         match &recovered_entries[0].command {
             AofCommand::Set { key, value } => {
@@ -745,7 +842,7 @@ mod tests {
             }
             _ => panic!("Expected SET command"),
         }
-        
+
         // Verify second entry
         match &recovered_entries[1].command {
             AofCommand::Set { key, value } => {
@@ -754,7 +851,7 @@ mod tests {
             }
             _ => panic!("Expected SET command"),
         }
-        
+
         // Verify third entry
         match &recovered_entries[2].command {
             AofCommand::Delete { key } => {
@@ -763,38 +860,44 @@ mod tests {
             _ => panic!("Expected DELETE command"),
         }
     }
-    
+
     #[tokio::test]
     async fn test_persistence_manager() {
         let temp_dir = tempdir().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
         let config = create_test_config(aof_path);
-        
+
         let manager = PersistenceManager::new(&config).await.unwrap();
         assert!(manager.is_enabled());
-        
+
         // Test logging operations
-        manager.log_set("test_key".to_string(), ValueType::String("test_value".to_string())).await.unwrap();
+        manager
+            .log_set(
+                "test_key".to_string(),
+                ValueType::String("test_value".to_string()),
+            )
+            .await
+            .unwrap();
         manager.log_delete("test_key".to_string()).await.unwrap();
-        
+
         // Give background writer time to process
         sleep(Duration::from_millis(100)).await;
-        
+
         // Verify file was created and has content
         let file_size = manager.file_size().await.unwrap();
         assert!(file_size > 0);
     }
-    
+
     #[tokio::test]
     async fn test_aof_with_expiration() {
         let temp_dir = tempdir().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
         let config = create_test_config(aof_path.clone());
-        
+
         // Write entry with expiration
         {
             let mut writer = AofWriter::new(&config).await.unwrap();
-            
+
             let expires_at = Instant::now() + Duration::from_secs(60);
             let entry = AofEntry {
                 timestamp: current_timestamp(),
@@ -804,55 +907,65 @@ mod tests {
                     expires_at: instant_to_timestamp(expires_at),
                 },
             };
-            
+
             writer.write_entry(entry).await.unwrap();
             writer.flush().await.unwrap();
         }
-        
+
         // Recover and verify
         let recovery_handler = RecoveryHandler::new(aof_path);
         let recovered_entries = recovery_handler.recover().await.unwrap();
-        
+
         assert_eq!(recovered_entries.len(), 1);
         match &recovered_entries[0].command {
-            AofCommand::SetWithExpiration { key, value, expires_at: _ } => {
+            AofCommand::SetWithExpiration {
+                key,
+                value,
+                expires_at: _,
+            } => {
                 assert_eq!(key, "expiring_key");
                 assert_eq!(value.to_string(), "expiring_value");
             }
             _ => panic!("Expected SETEX command"),
         }
     }
-    
+
     #[tokio::test]
     async fn test_aof_disabled() {
         let temp_dir = tempdir().unwrap();
         let aof_path = temp_dir.path().join("test.aof");
         let mut config = create_test_config(aof_path);
         config.storage.aof_enabled = false;
-        
+
         let manager = PersistenceManager::new(&config).await.unwrap();
         assert!(!manager.is_enabled());
-        
+
         // Operations should succeed but not write to file
-        manager.log_set("test_key".to_string(), ValueType::String("test_value".to_string())).await.unwrap();
-        
+        manager
+            .log_set(
+                "test_key".to_string(),
+                ValueType::String("test_value".to_string()),
+            )
+            .await
+            .unwrap();
+
         let file_size = manager.file_size().await.unwrap();
         assert_eq!(file_size, 0);
     }
-    
+
     #[test]
     fn test_timestamp_conversion() {
         let now = Instant::now();
         let timestamp = instant_to_timestamp(now);
         let converted_back = timestamp_to_instant(timestamp);
-        
+
         // Should be approximately the same (within a few seconds due to conversion precision)
         let diff = if converted_back > now {
             converted_back - now
         } else {
             now - converted_back
         };
-        
+
         assert!(diff < Duration::from_secs(5));
     }
 }

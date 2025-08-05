@@ -1,5 +1,5 @@
 //! Configuration management for RustyPotato
-//! 
+//!
 //! This module handles loading and validating configuration from various sources
 //! including files, environment variables, and command line arguments.
 
@@ -152,7 +152,10 @@ impl Config {
             info!("Loading configuration from: {}", config_file_path.display());
             builder = builder.add_source(File::from(config_file_path));
         } else {
-            debug!("Configuration file not found: {}, using defaults", config_file_path.display());
+            debug!(
+                "Configuration file not found: {}, using defaults",
+                config_file_path.display()
+            );
         }
 
         // Add environment variables with RUSTYPOTATO_ prefix
@@ -160,23 +163,24 @@ impl Config {
             Environment::with_prefix("RUSTYPOTATO")
                 .prefix_separator("_")
                 .separator(".")
-                .try_parsing(true)
+                .try_parsing(true),
         );
 
         // Build and validate configuration
-        let config = builder.build()
-            .map_err(|e| RustyPotatoError::ConfigError {
-                message: format!("Failed to build configuration: {}", e),
-                config_key: None,
-                source: Some(Box::new(e)),
-            })?;
+        let config = builder.build().map_err(|e| RustyPotatoError::ConfigError {
+            message: format!("Failed to build configuration: {}", e),
+            config_key: None,
+            source: Some(Box::new(e)),
+        })?;
 
-        let parsed_config: Config = config.try_deserialize()
-            .map_err(|e| RustyPotatoError::ConfigError {
-                message: format!("Failed to parse configuration: {}", e),
-                config_key: None,
-                source: Some(Box::new(e)),
-            })?;
+        let parsed_config: Config =
+            config
+                .try_deserialize()
+                .map_err(|e| RustyPotatoError::ConfigError {
+                    message: format!("Failed to parse configuration: {}", e),
+                    config_key: None,
+                    source: Some(Box::new(e)),
+                })?;
 
         // Validate the configuration
         parsed_config.validate()?;
@@ -194,8 +198,11 @@ impl Config {
 
         // Also check user config directory
         if let Some(config_dir) = dirs::config_dir() {
-            candidates.into_iter()
-                .chain(std::iter::once(config_dir.join("rustypotato").join("rustypotato.toml")))
+            candidates
+                .into_iter()
+                .chain(std::iter::once(
+                    config_dir.join("rustypotato").join("rustypotato.toml"),
+                ))
                 .find(|path| path.exists())
         } else {
             candidates.into_iter().find(|path| path.exists())
@@ -206,13 +213,13 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         // Validate server configuration
         self.server.validate()?;
-        
+
         // Validate storage configuration
         self.storage.validate()?;
-        
+
         // Validate network configuration
         self.network.validate()?;
-        
+
         // Validate logging configuration
         self.logging.validate()?;
 
@@ -222,21 +229,23 @@ impl Config {
     /// Create a sample configuration file
     pub fn create_sample_config<P: AsRef<Path>>(path: P) -> Result<()> {
         let sample_config = Config::default();
-        let toml_content = toml::to_string_pretty(&sample_config)
-            .map_err(|e| RustyPotatoError::ConfigError {
+        let toml_content =
+            toml::to_string_pretty(&sample_config).map_err(|e| RustyPotatoError::ConfigError {
                 message: format!("Failed to serialize sample config: {}", e),
                 config_key: None,
                 source: Some(Box::new(e)),
             })?;
 
-        std::fs::write(path.as_ref(), toml_content)
-            .map_err(|e| RustyPotatoError::ConfigError {
-                message: format!("Failed to write sample config: {}", e),
-                config_key: None,
-                source: Some(Box::new(e)),
-            })?;
+        std::fs::write(path.as_ref(), toml_content).map_err(|e| RustyPotatoError::ConfigError {
+            message: format!("Failed to write sample config: {}", e),
+            config_key: None,
+            source: Some(Box::new(e)),
+        })?;
 
-        info!("Sample configuration written to: {}", path.as_ref().display());
+        info!(
+            "Sample configuration written to: {}",
+            path.as_ref().display()
+        );
         Ok(())
     }
 }
@@ -263,7 +272,10 @@ impl ServerConfig {
         }
 
         if self.max_connections > 1_000_000 {
-            warn!("Max connections is very high ({}), this may cause resource issues", self.max_connections);
+            warn!(
+                "Max connections is very high ({}), this may cause resource issues",
+                self.max_connections
+            );
         }
 
         if let Some(threads) = self.worker_threads {
@@ -275,7 +287,10 @@ impl ServerConfig {
                 });
             }
             if threads > 1000 {
-                warn!("Worker threads is very high ({}), this may cause performance issues", threads);
+                warn!(
+                    "Worker threads is very high ({}), this may cause performance issues",
+                    threads
+                );
             }
         }
 
@@ -301,7 +316,8 @@ impl StorageConfig {
 
         // Validate memory limit
         if let Some(limit) = self.memory_limit {
-            if limit < 1024 * 1024 {  // 1MB minimum
+            if limit < 1024 * 1024 {
+                // 1MB minimum
                 return Err(RustyPotatoError::ConfigError {
                     message: "Memory limit must be at least 1MB".to_string(),
                     config_key: Some("server.memory_limit".to_string()),
@@ -342,7 +358,10 @@ impl NetworkConfig {
 
         // Warn about very high timeout values
         if self.connection_timeout > 3600 {
-            warn!("Connection timeout is very high ({} seconds)", self.connection_timeout);
+            warn!(
+                "Connection timeout is very high ({} seconds)",
+                self.connection_timeout
+            );
         }
 
         Ok(())
@@ -353,12 +372,17 @@ impl LoggingConfig {
     fn validate(&self) -> Result<()> {
         // Validate log level
         match self.level.to_lowercase().as_str() {
-            "trace" | "debug" | "info" | "warn" | "error" => {},
-            _ => return Err(RustyPotatoError::ConfigError {
-                message: format!("Invalid log level: {}. Must be one of: trace, debug, info, warn, error", self.level),
-                config_key: Some("logging.level".to_string()),
-                source: None,
-            }),
+            "trace" | "debug" | "info" | "warn" | "error" => {}
+            _ => {
+                return Err(RustyPotatoError::ConfigError {
+                    message: format!(
+                        "Invalid log level: {}. Must be one of: trace, debug, info, warn, error",
+                        self.level
+                    ),
+                    config_key: Some("logging.level".to_string()),
+                    source: None,
+                })
+            }
         }
 
         // Validate log file path if specified
@@ -388,8 +412,7 @@ impl From<ConfigError> for RustyPotatoError {
         }
     }
 }
-#[cfg(
-test)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::env;
@@ -398,21 +421,24 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        
+
         assert_eq!(config.server.port, 6379);
         assert_eq!(config.server.bind_address, "127.0.0.1");
         assert_eq!(config.server.max_connections, 10000);
         assert!(config.server.worker_threads.is_none());
-        
+
         assert!(config.storage.aof_enabled);
         assert_eq!(config.storage.aof_path, PathBuf::from("rustypotato.aof"));
-        assert!(matches!(config.storage.aof_fsync_policy, FsyncPolicy::EverySecond));
+        assert!(matches!(
+            config.storage.aof_fsync_policy,
+            FsyncPolicy::EverySecond
+        ));
         assert!(config.storage.memory_limit.is_none());
-        
+
         assert!(config.network.tcp_nodelay);
         assert!(config.network.tcp_keepalive);
         assert_eq!(config.network.connection_timeout, 30);
-        
+
         assert_eq!(config.logging.level, "info");
         assert!(matches!(config.logging.format, LogFormat::Pretty));
         assert!(config.logging.file_path.is_none());
@@ -511,7 +537,8 @@ mod tests {
         std::fs::create_dir_all(&log_dir).unwrap();
         let log_path = log_dir.join("rustypotato.log");
 
-        let toml_content = format!(r#"
+        let toml_content = format!(
+            r#"
 [server]
 port = 8000
 bind_address = "0.0.0.0"
@@ -535,7 +562,9 @@ write_timeout = 45
 level = "error"
 format = "Json"
 file_path = "{}"
-"#, log_path.to_string_lossy().replace('\\', "\\\\"));
+"#,
+            log_path.to_string_lossy().replace('\\', "\\\\")
+        );
 
         std::fs::write(&config_path, toml_content).unwrap();
 
@@ -548,7 +577,10 @@ file_path = "{}"
 
         assert!(!config.storage.aof_enabled);
         assert_eq!(config.storage.aof_path, PathBuf::from("test.aof"));
-        assert!(matches!(config.storage.aof_fsync_policy, FsyncPolicy::Always));
+        assert!(matches!(
+            config.storage.aof_fsync_policy,
+            FsyncPolicy::Always
+        ));
         assert_eq!(config.storage.memory_limit, Some(1073741824));
 
         assert!(!config.network.tcp_nodelay);
@@ -562,22 +594,22 @@ file_path = "{}"
 
     #[test]
     fn test_config_from_environment_variables() {
-        use std::sync::Mutex;
         use std::collections::HashMap;
-        
+        use std::sync::Mutex;
+
         // Use a lock to ensure this test runs in isolation
         static TEST_LOCK: Mutex<()> = Mutex::new(());
         let _guard = TEST_LOCK.lock().unwrap();
-        
+
         // Store original environment state
         let env_vars = [
             "RUSTYPOTATO_SERVER.PORT",
-            "RUSTYPOTATO_SERVER.BIND_ADDRESS", 
+            "RUSTYPOTATO_SERVER.BIND_ADDRESS",
             "RUSTYPOTATO_SERVER.MAX_CONNECTIONS",
             "RUSTYPOTATO_STORAGE.AOF_ENABLED",
-            "RUSTYPOTATO_LOGGING.LEVEL"
+            "RUSTYPOTATO_LOGGING.LEVEL",
         ];
-        
+
         let mut original_values: HashMap<&str, Option<String>> = HashMap::new();
         for var in &env_vars {
             original_values.insert(var, env::var(var).ok());
@@ -593,24 +625,24 @@ file_path = "{}"
 
         // Test the config builder directly to debug
         let mut builder = ConfigBuilder::builder();
-        
+
         // Start with defaults
         builder = builder.add_source(config::Config::try_from(&Config::default()).unwrap());
-        
+
         // Add environment variables
         builder = builder.add_source(
             Environment::with_prefix("RUSTYPOTATO")
                 .prefix_separator("_")
                 .separator(".")
-                .try_parsing(true)
+                .try_parsing(true),
         );
 
         let built_config = builder.build().unwrap();
-        
+
         // Debug: print the config as a map (for debugging)
         // let config_map = built_config.clone().try_deserialize::<std::collections::HashMap<String, config::Value>>().unwrap();
         // println!("Config map: {:?}", config_map);
-        
+
         let config: Config = built_config.try_deserialize().unwrap();
 
         // Validate the configuration
@@ -633,13 +665,13 @@ file_path = "{}"
 
     #[test]
     fn test_config_precedence() {
-        use std::sync::Mutex;
         use std::collections::HashMap;
-        
+        use std::sync::Mutex;
+
         // Use a lock to ensure this test runs in isolation
         static TEST_LOCK: Mutex<()> = Mutex::new(());
         let _guard = TEST_LOCK.lock().unwrap();
-        
+
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("precedence_test.toml");
 
@@ -694,13 +726,13 @@ port = "not_a_number"
 
     #[test]
     fn test_create_sample_config() {
-        use std::sync::Mutex;
         use std::collections::HashMap;
-        
+        use std::sync::Mutex;
+
         // Use a lock to ensure this test runs in isolation
         static TEST_LOCK: Mutex<()> = Mutex::new(());
         let _guard = TEST_LOCK.lock().unwrap();
-        
+
         let temp_dir = TempDir::new().unwrap();
         let sample_path = temp_dir.path().join("sample.toml");
 
@@ -719,7 +751,7 @@ port = "not_a_number"
         // Verify the sample config can be loaded
         let config = Config::load_from_file(Some(&sample_path)).unwrap();
         assert_eq!(config.server.port, 6379); // Should match defaults
-        
+
         // Restore original environment state
         for var in &env_vars {
             env::remove_var(var);
@@ -732,7 +764,7 @@ port = "not_a_number"
     #[test]
     fn test_nonexistent_config_file() {
         let nonexistent_path = PathBuf::from("/nonexistent/path/config.toml");
-        
+
         // Should succeed and use defaults when file doesn't exist
         let config = Config::load_from_file(Some(&nonexistent_path)).unwrap();
         // Should succeed and use defaults when file doesn't exist
@@ -770,15 +802,18 @@ aof_path = "/nonexistent/directory/test.aof"
         for policy in policies {
             let mut config = Config::default();
             config.storage.aof_fsync_policy = policy;
-            
+
             let toml_str = toml::to_string(&config).unwrap();
             let parsed_config: Config = toml::from_str(&toml_str).unwrap();
-            
+
             assert!(matches!(
-                (&config.storage.aof_fsync_policy, &parsed_config.storage.aof_fsync_policy),
-                (FsyncPolicy::Always, FsyncPolicy::Always) |
-                (FsyncPolicy::EverySecond, FsyncPolicy::EverySecond) |
-                (FsyncPolicy::Never, FsyncPolicy::Never)
+                (
+                    &config.storage.aof_fsync_policy,
+                    &parsed_config.storage.aof_fsync_policy
+                ),
+                (FsyncPolicy::Always, FsyncPolicy::Always)
+                    | (FsyncPolicy::EverySecond, FsyncPolicy::EverySecond)
+                    | (FsyncPolicy::Never, FsyncPolicy::Never)
             ));
         }
     }
@@ -786,24 +821,20 @@ aof_path = "/nonexistent/directory/test.aof"
     #[test]
     fn test_log_format_serialization() {
         // Test that LogFormat can be serialized/deserialized correctly
-        let formats = vec![
-            LogFormat::Json,
-            LogFormat::Pretty,
-            LogFormat::Compact,
-        ];
+        let formats = vec![LogFormat::Json, LogFormat::Pretty, LogFormat::Compact];
 
         for format in formats {
             let mut config = Config::default();
             config.logging.format = format;
-            
+
             let toml_str = toml::to_string(&config).unwrap();
             let parsed_config: Config = toml::from_str(&toml_str).unwrap();
-            
+
             assert!(matches!(
                 (&config.logging.format, &parsed_config.logging.format),
-                (LogFormat::Json, LogFormat::Json) |
-                (LogFormat::Pretty, LogFormat::Pretty) |
-                (LogFormat::Compact, LogFormat::Compact)
+                (LogFormat::Json, LogFormat::Json)
+                    | (LogFormat::Pretty, LogFormat::Pretty)
+                    | (LogFormat::Compact, LogFormat::Compact)
             ));
         }
     }

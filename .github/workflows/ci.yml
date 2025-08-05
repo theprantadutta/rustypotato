@@ -37,6 +37,10 @@ jobs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     
+    - name: Do formatting
+      run: cargo fmt --all
+      if: matrix.rust == 'stable'
+    
     - name: Check formatting
       run: cargo fmt --all -- --check
       if: matrix.rust == 'stable'

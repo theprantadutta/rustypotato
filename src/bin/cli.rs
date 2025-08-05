@@ -1,10 +1,10 @@
 //! RustyPotato CLI client binary
-//! 
+//!
 //! Command-line interface for interacting with RustyPotato servers
 
 use clap::Parser;
-use rustypotato::cli::{Cli, Commands, CliClient};
 use rustypotato::cli::interactive::InteractiveMode;
+use rustypotato::cli::{Cli, CliClient, Commands};
 use tracing::error;
 
 #[tokio::main]
@@ -54,12 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Execute a single command and display the result
 async fn execute_single_command(
-    address: &str, 
-    command: &str, 
-    args: &[String]
+    address: &str,
+    command: &str,
+    args: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = CliClient::with_address(address.to_string());
-    
+
     // Connect to server
     if let Err(e) = client.connect().await {
         eprintln!("Failed to connect to server at {}: {}", address, e);
