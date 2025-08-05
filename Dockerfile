@@ -16,8 +16,8 @@ COPY Cargo.toml Cargo.lock ./
 # Copy source code
 COPY src ./src
 
-# Build for release
-RUN cargo build --release
+# Build for release (exclude benchmarks and tests for Docker)
+RUN cargo build --release --bins
 
 # Runtime stage
 FROM debian:bookworm-slim
