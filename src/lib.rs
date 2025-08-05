@@ -21,6 +21,10 @@ pub mod storage;
 pub use config::Config;
 pub use error::{Result, RustyPotatoError};
 
+// Test utilities (only available in test builds)
+#[cfg(test)]
+pub mod test_utils;
+
 // Re-export commonly used types
 pub use commands::{CommandRegistry, CommandResult, ResponseValue};
 pub use metrics::{MetricsCollector, MetricsServer};

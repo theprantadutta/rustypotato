@@ -5,10 +5,58 @@
 
 use rustypotato::{Config, RustyPotatoServer};
 use std::env;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tempfile::TempDir;
+
+// Global mutex to ensure all config-related tests run serially
+// This prevents environment variable pollution between tests
+static GLOBAL_CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Helper function to clean up all RUSTYPOTATO_ environment variables
+/// and return the original values for restoration
+fn clean_rustypotato_env() -> HashMap<String, String> {
+    let mut original_values = HashMap::new();
+    
+    // Collect all RUSTYPOTATO_ environment variables
+    let rustypotato_vars: Vec<String> = env::vars()
+        .filter(|(key, _)| key.starts_with("RUSTYPOTATO_"))
+        .map(|(key, value)| {
+            original_values.insert(key.clone(), value);
+            key
+        })
+        .collect();
+    
+    // Remove all RUSTYPOTATO_ variables
+    for var in rustypotato_vars {
+        env::remove_var(&var);
+    }
+    
+    original_values
+}
+
+/// Helper function to restore environment variables
+fn restore_env(original_values: HashMap<String, String>) {
+    // First remove any RUSTYPOTATO_ variables that might have been set
+    for (key, _) in env::vars() {
+        if key.starts_with("RUSTYPOTATO_") {
+            env::remove_var(&key);
+        }
+    }
+    
+    // Then restore the original values
+    for (key, value) in original_values {
+        env::set_var(key, value);
+    }
+}
 
 #[tokio::test]
 async fn test_config_integration() {
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
+    
+    // Clean up environment before test
+    let original_env = clean_rustypotato_env();
+    
     // Test that the server can be created with default configuration
     let config = Config::default();
     let server = RustyPotatoServer::new(config).unwrap();
@@ -16,30 +64,17 @@ async fn test_config_integration() {
     assert_eq!(server.config().server.port, 6379);
     assert_eq!(server.config().server.bind_address, "127.0.0.1");
     assert_eq!(server.config().server.max_connections, 10000);
+    
+    // Restore environment
+    restore_env(original_env);
 }
 
 #[tokio::test]
 async fn test_config_loading() {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
 
-    // Use a global lock to ensure all config tests run in isolation
-    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = CONFIG_TEST_LOCK.lock().unwrap();
-
-    // Store original environment state and clear any test variables
-    let env_vars = [
-        "RUSTYPOTATO_SERVER.PORT",
-        "RUSTYPOTATO_SERVER.BIND_ADDRESS", 
-        "RUSTYPOTATO_STORAGE.AOF_ENABLED",
-        "RUSTYPOTATO_LOGGING.LEVEL",
-    ];
-
-    let mut original_values: HashMap<&str, Option<String>> = HashMap::new();
-    for var in &env_vars {
-        original_values.insert(var, env::var(var).ok());
-        env::remove_var(var);
-    }
+    // Clean up all RUSTYPOTATO_ environment variables
+    let original_env = clean_rustypotato_env();
 
     // Test that configuration can be loaded from the load() method
     let config = Config::load().unwrap();
@@ -50,36 +85,15 @@ async fn test_config_loading() {
     assert_eq!(config.logging.level, "info");
 
     // Restore original environment state
-    for var in &env_vars {
-        env::remove_var(var);
-        if let Some(value) = original_values.get(var).unwrap() {
-            env::set_var(var, value);
-        }
-    }
+    restore_env(original_env);
 }
 
 #[tokio::test]
 async fn test_config_from_file() {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
 
-    // Use the same global lock to ensure all config tests run in isolation
-    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = CONFIG_TEST_LOCK.lock().unwrap();
-
-    // Clear any environment variables that might interfere
-    let env_vars = [
-        "RUSTYPOTATO_SERVER.PORT",
-        "RUSTYPOTATO_SERVER.BIND_ADDRESS",
-        "RUSTYPOTATO_STORAGE.AOF_ENABLED",
-        "RUSTYPOTATO_LOGGING.LEVEL",
-    ];
-
-    let mut original_values: HashMap<&str, Option<String>> = HashMap::new();
-    for var in &env_vars {
-        original_values.insert(var, env::var(var).ok());
-        env::remove_var(var);
-    }
+    // Clean up all RUSTYPOTATO_ environment variables
+    let original_env = clean_rustypotato_env();
 
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("test_config.toml");
@@ -110,16 +124,16 @@ level = "debug"
     assert_eq!(config.logging.level, "debug");
 
     // Restore original environment state
-    for var in &env_vars {
-        env::remove_var(var);
-        if let Some(value) = original_values.get(var).unwrap() {
-            env::set_var(var, value);
-        }
-    }
+    restore_env(original_env);
 }
 
 #[tokio::test]
 async fn test_config_validation_errors() {
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
+    
+    // Clean up environment before test
+    let original_env = clean_rustypotato_env();
+    
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("invalid_config.toml");
 
@@ -133,10 +147,18 @@ max_connections = 0
 
     let result = Config::load_from_file(Some(&config_path));
     assert!(result.is_err());
+    
+    // Restore environment
+    restore_env(original_env);
 }
 
 #[tokio::test]
 async fn test_sample_config_creation() {
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
+    
+    // Clean up environment before test
+    let original_env = clean_rustypotato_env();
+    
     let temp_dir = TempDir::new().unwrap();
     let sample_path = temp_dir.path().join("sample.toml");
 
@@ -149,30 +171,17 @@ async fn test_sample_config_creation() {
     let server = RustyPotatoServer::new(config).unwrap();
 
     assert_eq!(server.config().server.port, 6379);
+    
+    // Restore environment
+    restore_env(original_env);
 }
 
 #[test]
 fn test_config_with_environment_variables() {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
 
-    // Use the same global lock to ensure all config tests run in isolation
-    static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = CONFIG_TEST_LOCK.lock().unwrap();
-
-    // Store original environment state
-    let env_vars = [
-        "RUSTYPOTATO_SERVER.PORT",
-        "RUSTYPOTATO_SERVER.BIND_ADDRESS",
-        "RUSTYPOTATO_STORAGE.AOF_ENABLED",
-        "RUSTYPOTATO_LOGGING.LEVEL",
-    ];
-
-    let mut original_values: HashMap<&str, Option<String>> = HashMap::new();
-    for var in &env_vars {
-        original_values.insert(var, env::var(var).ok());
-        env::remove_var(var);
-    }
+    // Clean up all RUSTYPOTATO_ environment variables
+    let original_env = clean_rustypotato_env();
 
     // Set test environment variables
     env::set_var("RUSTYPOTATO_SERVER.PORT", "9000");
@@ -186,16 +195,16 @@ fn test_config_with_environment_variables() {
     assert!(!config.storage.aof_enabled);
 
     // Restore original environment state
-    for var in &env_vars {
-        env::remove_var(var);
-        if let Some(value) = original_values.get(var).unwrap() {
-            env::set_var(var, value);
-        }
-    }
+    restore_env(original_env);
 }
 
 #[tokio::test]
 async fn test_server_with_custom_config() {
+    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
+    
+    // Clean up environment before test
+    let original_env = clean_rustypotato_env();
+    
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("server_test.toml");
 
@@ -226,4 +235,7 @@ level = "warn"
     assert_eq!(server.config().server.max_connections, 100);
     assert!(!server.config().storage.aof_enabled);
     assert_eq!(server.config().logging.level, "warn");
+    
+    // Restore environment
+    restore_env(original_env);
 }
