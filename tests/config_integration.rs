@@ -200,15 +200,16 @@ fn test_config_with_environment_variables() {
 
 #[tokio::test]
 async fn test_server_with_custom_config() {
-    let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
-    
-    // Clean up environment before test
-    let original_env = clean_rustypotato_env();
-    
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = temp_dir.path().join("server_test.toml");
+    let (config, original_env) = {
+        let _guard = GLOBAL_CONFIG_TEST_LOCK.lock().unwrap();
+        
+        // Clean up environment before test
+        let original_env = clean_rustypotato_env();
+        
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("server_test.toml");
 
-    let toml_content = r#"
+        let toml_content = r#"
 [server]
 port = 0  # Use random port for testing
 bind_address = "127.0.0.1"
@@ -221,9 +222,13 @@ aof_enabled = false
 level = "warn"
 "#;
 
-    std::fs::write(&config_path, toml_content).unwrap();
+        std::fs::write(&config_path, toml_content).unwrap();
 
-    let config = Config::load_from_file(Some(&config_path)).unwrap();
+        let config = Config::load_from_file(Some(&config_path)).unwrap();
+        (config, original_env)
+        // Guard is automatically dropped here
+    };
+
     let mut server = RustyPotatoServer::new(config).unwrap();
 
     // Test that the server can start with the custom configuration
