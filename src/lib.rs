@@ -33,8 +33,8 @@ pub use network::TcpServer;
 pub use storage::{MemoryStore, StoredValue, ValueType};
 
 use commands::{
-    DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, IncrCommand, SetCommand,
-    TtlCommand,
+    DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand, HgetCommand,
+    HgetallCommand, HexistsCommand, HsetCommand, IncrCommand, SetCommand, TtlCommand,
 };
 use std::sync::Arc;
 
@@ -89,6 +89,13 @@ impl RustyPotatoServer {
         // Register atomic integer commands
         command_registry.register(Box::new(IncrCommand));
         command_registry.register(Box::new(DecrCommand));
+
+        // Register hash commands
+        command_registry.register(Box::new(HsetCommand));
+        command_registry.register(Box::new(HgetCommand));
+        command_registry.register(Box::new(HdelCommand));
+        command_registry.register(Box::new(HgetallCommand));
+        command_registry.register(Box::new(HexistsCommand));
 
         let command_registry = Arc::new(command_registry);
 
@@ -219,7 +226,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
         let stats = server.stats().await;
 
-        assert_eq!(stats.registered_commands, 8); // SET, GET, DEL, EXISTS, EXPIRE, TTL, INCR, DECR
+        assert_eq!(stats.registered_commands, 13); // SET, GET, DEL, EXISTS, EXPIRE, TTL, INCR, DECR, HSET, HGET, HDEL, HGETALL, HEXISTS
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -232,9 +239,11 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 8);
+        assert_eq!(server.command_registry().command_count(), 13);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
+        assert!(server.command_registry().has_command("HSET"));
+        assert!(server.command_registry().has_command("HGET"));
     }
 
     #[tokio::test]

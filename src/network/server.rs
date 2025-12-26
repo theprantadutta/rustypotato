@@ -437,7 +437,7 @@ impl TcpServer {
                                     commands_processed += processed_count;
 
                                     // Log periodic statistics for active connections
-                                    if commands_processed % 1000 == 0 {
+                                    if commands_processed.is_multiple_of(1000) {
                                         debug!("Client {} from {} has processed {} commands in {:?}",
                                                client_id, remote_addr, commands_processed, connection_start.elapsed());
                                     }

@@ -5,6 +5,7 @@
 //! atomic operations.
 
 pub mod atomic;
+pub mod hash;
 pub mod registry;
 pub mod string;
 pub mod ttl;
@@ -13,6 +14,7 @@ pub mod ttl;
 mod integration_tests;
 
 pub use atomic::{DecrCommand, IncrCommand};
+pub use hash::{HdelCommand, HgetCommand, HgetallCommand, HexistsCommand, HsetCommand};
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};

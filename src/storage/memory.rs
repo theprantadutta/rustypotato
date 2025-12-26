@@ -3,15 +3,19 @@
 use crate::error::{Result, RustyPotatoError};
 use crate::storage::persistence::{AofCommand, PersistenceManager};
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
 /// Value types supported by RustyPotato
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ValueType {
     String(String),
     Integer(i64),
+    Hash(HashMap<String, String>),
+    List(VecDeque<String>),
 }
 
 impl ValueType {
@@ -20,6 +24,8 @@ impl ValueType {
         match self {
             ValueType::String(s) => s.clone(),
             ValueType::Integer(i) => i.to_string(),
+            ValueType::Hash(_) => "(hash)".to_string(),
+            ValueType::List(_) => "(list)".to_string(),
         }
     }
 
@@ -30,6 +36,12 @@ impl ValueType {
             ValueType::String(s) => s
                 .parse::<i64>()
                 .map_err(|_| RustyPotatoError::NotAnInteger { value: s.clone() }),
+            ValueType::Hash(_) => Err(RustyPotatoError::NotAnInteger { 
+                value: "hash".to_string() 
+            }),
+            ValueType::List(_) => Err(RustyPotatoError::NotAnInteger { 
+                value: "list".to_string() 
+            }),
         }
     }
 
@@ -43,12 +55,88 @@ impl ValueType {
         matches!(self, ValueType::Integer(_))
     }
 
+    /// Check if value is a hash type
+    pub fn is_hash(&self) -> bool {
+        matches!(self, ValueType::Hash(_))
+    }
+
+    /// Check if value is a list type
+    pub fn is_list(&self) -> bool {
+        matches!(self, ValueType::List(_))
+    }
+
     /// Get the type name as a string
     pub fn type_name(&self) -> &'static str {
         match self {
             ValueType::String(_) => "string",
             ValueType::Integer(_) => "integer",
+            ValueType::Hash(_) => "hash",
+            ValueType::List(_) => "list",
         }
+    }
+
+    /// Get hash reference if this is a hash type
+    pub fn as_hash(&self) -> Result<&HashMap<String, String>> {
+        match self {
+            ValueType::Hash(h) => Ok(h),
+            _ => Err(RustyPotatoError::StorageError {
+                message: format!("Value is not a hash, it's a {}", self.type_name()),
+                operation: Some("as_hash".to_string()),
+                source: None,
+            }),
+        }
+    }
+
+    /// Get mutable hash reference if this is a hash type
+    pub fn as_hash_mut(&mut self) -> Result<&mut HashMap<String, String>> {
+        match self {
+            ValueType::Hash(h) => Ok(h),
+            _ => Err(RustyPotatoError::StorageError {
+                message: format!("Value is not a hash, it's a {}", self.type_name()),
+                operation: Some("as_hash_mut".to_string()),
+                source: None,
+            }),
+        }
+    }
+
+    /// Get list reference if this is a list type
+    pub fn as_list(&self) -> Result<&VecDeque<String>> {
+        match self {
+            ValueType::List(l) => Ok(l),
+            _ => Err(RustyPotatoError::StorageError {
+                message: format!("Value is not a list, it's a {}", self.type_name()),
+                operation: Some("as_list".to_string()),
+                source: None,
+            }),
+        }
+    }
+
+    /// Get mutable list reference if this is a list type
+    pub fn as_list_mut(&mut self) -> Result<&mut VecDeque<String>> {
+        match self {
+            ValueType::List(l) => Ok(l),
+            _ => Err(RustyPotatoError::StorageError {
+                message: format!("Value is not a list, it's a {}", self.type_name()),
+                operation: Some("as_list_mut".to_string()),
+                source: None,
+            }),
+        }
+    }
+
+    /// Serialize the value to bytes for persistence
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        bincode::serialize(self).map_err(|e| RustyPotatoError::SerializationError {
+            message: format!("Failed to serialize value: {}", e),
+            source: Some(Box::new(e)),
+        })
+    }
+
+    /// Deserialize value from bytes
+    pub fn deserialize(data: &[u8]) -> Result<Self> {
+        bincode::deserialize(data).map_err(|e| RustyPotatoError::SerializationError {
+            message: format!("Failed to deserialize value: {}", e),
+            source: Some(Box::new(e)),
+        })
     }
 }
 
@@ -82,6 +170,90 @@ impl From<i32> for ValueType {
     }
 }
 
+impl From<HashMap<String, String>> for ValueType {
+    fn from(h: HashMap<String, String>) -> Self {
+        ValueType::Hash(h)
+    }
+}
+
+impl From<VecDeque<String>> for ValueType {
+    fn from(l: VecDeque<String>) -> Self {
+        ValueType::List(l)
+    }
+}
+
+impl From<Vec<String>> for ValueType {
+    fn from(v: Vec<String>) -> Self {
+        ValueType::List(VecDeque::from(v))
+    }
+}
+
+/// Metadata for complex data types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValueMetadata {
+    /// Size in bytes (estimated for complex types)
+    pub size_bytes: usize,
+    /// Number of elements (for hash/list types)
+    pub element_count: usize,
+    /// Last modification time (for complex types)
+    pub last_modified: Option<std::time::SystemTime>,
+    /// Custom metadata for extensions
+    pub custom: HashMap<String, String>,
+}
+
+impl ValueMetadata {
+    /// Create metadata for a value
+    pub fn for_value(value: &ValueType) -> Self {
+        let (size_bytes, element_count) = match value {
+            ValueType::String(s) => (s.len(), 1),
+            ValueType::Integer(_) => (8, 1), // i64 is 8 bytes
+            ValueType::Hash(h) => {
+                let size = h.iter()
+                    .map(|(k, v)| k.len() + v.len())
+                    .sum::<usize>();
+                (size, h.len())
+            },
+            ValueType::List(l) => {
+                let size = l.iter()
+                    .map(|s| s.len())
+                    .sum::<usize>();
+                (size, l.len())
+            },
+        };
+
+        Self {
+            size_bytes,
+            element_count,
+            last_modified: Some(std::time::SystemTime::now()),
+            custom: HashMap::new(),
+        }
+    }
+
+    /// Update metadata after value modification
+    pub fn update_for_value(&mut self, value: &ValueType) {
+        let (size_bytes, element_count) = match value {
+            ValueType::String(s) => (s.len(), 1),
+            ValueType::Integer(_) => (8, 1),
+            ValueType::Hash(h) => {
+                let size = h.iter()
+                    .map(|(k, v)| k.len() + v.len())
+                    .sum::<usize>();
+                (size, h.len())
+            },
+            ValueType::List(l) => {
+                let size = l.iter()
+                    .map(|s| s.len())
+                    .sum::<usize>();
+                (size, l.len())
+            },
+        };
+
+        self.size_bytes = size_bytes;
+        self.element_count = element_count;
+        self.last_modified = Some(std::time::SystemTime::now());
+    }
+}
+
 /// Stored value with metadata
 #[derive(Debug, Clone)]
 pub struct StoredValue {
@@ -89,6 +261,7 @@ pub struct StoredValue {
     pub created_at: Instant,
     pub last_accessed: Instant,
     pub expires_at: Option<Instant>,
+    pub metadata: ValueMetadata,
 }
 
 /// High-performance concurrent in-memory store
@@ -565,6 +738,246 @@ impl MemoryStore {
         Ok(result)
     }
 
+    /// Set a field in a hash
+    pub async fn hset<K, F, V>(&self, key: K, field: F, value: V) -> Result<bool>
+    where
+        K: Into<String>,
+        F: Into<String>,
+        V: Into<String>,
+    {
+        let key_string = key.into();
+        let field_string = field.into();
+        let value_string = value.into();
+
+        // Check if key exists and handle expiration
+        if let Some(entry) = self.data.get(&key_string) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(&key_string)?;
+            }
+        }
+
+        // Use entry API for atomic operation
+        let is_new_field = match self.data.entry(key_string.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                // Key exists, check if it's a hash
+                match &entry.get().value {
+                    ValueType::Hash(existing_hash) => {
+                        let is_new = !existing_hash.contains_key(&field_string);
+                        
+                        // Clone the existing stored value and update it
+                        let mut stored_value = entry.get().clone();
+                        if let Ok(hash) = stored_value.value.as_hash_mut() {
+                            hash.insert(field_string, value_string);
+                            stored_value.touch();
+                            stored_value.update_metadata();
+                        }
+                        
+                        // Replace the entry
+                        entry.insert(stored_value);
+                        is_new
+                    }
+                    _ => {
+                        return Err(RustyPotatoError::StorageError {
+                            message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                            operation: Some("hset".to_string()),
+                            source: None,
+                        });
+                    }
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                // Key doesn't exist, create new hash
+                let mut hash = HashMap::new();
+                hash.insert(field_string, value_string);
+                let stored_value = StoredValue::new(ValueType::Hash(hash));
+                entry.insert(stored_value);
+                true // New field in new hash
+            }
+        };
+
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            // For now, we'll serialize the entire hash for persistence
+            // In a production system, we'd want more granular hash operations in AOF
+            if let Some(entry) = self.data.get(&key_string) {
+                persistence.log_set(key_string, entry.value.clone()).await?;
+            }
+        }
+
+        Ok(is_new_field)
+    }
+
+    /// Get a field from a hash
+    pub async fn hget<K, F>(&self, key: K, field: F) -> Result<Option<String>>
+    where
+        K: AsRef<str>,
+        F: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        let field_str = field.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                // Remove expired key
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(None);
+            }
+
+            // Update last accessed time
+            entry.touch();
+
+            match entry.value.as_hash() {
+                Ok(hash) => Ok(hash.get(field_str).cloned()),
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("hget".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Delete a field from a hash
+    pub async fn hdel<K, F>(&self, key: K, field: F) -> Result<bool>
+    where
+        K: AsRef<str>,
+        F: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        let field_str = field.as_ref();
+
+        // Check if key exists and handle expiration
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(false);
+            }
+        }
+
+        // Check if key exists and is a hash
+        let (was_removed, should_remove_key) = if let Some(entry) = self.data.get(key_str) {
+            match &entry.value {
+                ValueType::Hash(hash) => {
+                    let field_exists = hash.contains_key(field_str);
+                    let will_be_empty = hash.len() == 1 && field_exists;
+                    (field_exists, will_be_empty)
+                }
+                _ => {
+                    return Err(RustyPotatoError::StorageError {
+                        message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                        operation: Some("hdel".to_string()),
+                        source: None,
+                    });
+                }
+            }
+        } else {
+            return Ok(false);
+        };
+
+        if was_removed {
+            if should_remove_key {
+                // Remove the entire key if hash will be empty
+                self.data.remove(key_str);
+                self.expiration_index.remove(key_str);
+            } else {
+                // Update the hash by removing the field
+                if let Some(mut entry) = self.data.get_mut(key_str) {
+                    if let Ok(hash) = entry.value.as_hash_mut() {
+                        hash.remove(field_str);
+                        entry.touch();
+                        entry.update_metadata();
+                    }
+                }
+            }
+
+            // Log to persistence
+            if let Some(ref persistence) = self.persistence {
+                if should_remove_key {
+                    persistence.log_delete(key_str.to_string()).await?;
+                } else if let Some(entry) = self.data.get(key_str) {
+                    persistence.log_set(key_str.to_string(), entry.value.clone()).await?;
+                }
+            }
+        }
+
+        Ok(was_removed)
+    }
+
+    /// Get all fields and values from a hash
+    pub async fn hgetall<K>(&self, key: K) -> Result<Vec<(String, String)>>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                // Remove expired key
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(Vec::new());
+            }
+
+            // Update last accessed time
+            entry.touch();
+
+            match entry.value.as_hash() {
+                Ok(hash) => {
+                    let mut result = Vec::new();
+                    for (field, value) in hash.iter() {
+                        result.push((field.clone(), value.clone()));
+                    }
+                    Ok(result)
+                }
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("hgetall".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Check if a field exists in a hash
+    pub async fn hexists<K, F>(&self, key: K, field: F) -> Result<bool>
+    where
+        K: AsRef<str>,
+        F: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        let field_str = field.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                // Remove expired key
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(false);
+            }
+
+            // Update last accessed time
+            entry.touch();
+
+            match entry.value.as_hash() {
+                Ok(hash) => Ok(hash.contains_key(field_str)),
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("hexists".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Get memory usage statistics
     pub fn memory_stats(&self) -> MemoryStats {
         let key_count = self.data.len();
@@ -636,22 +1049,26 @@ impl StoredValue {
     /// Create a new stored value
     pub fn new(value: ValueType) -> Self {
         let now = Instant::now();
+        let metadata = ValueMetadata::for_value(&value);
         Self {
             value,
             created_at: now,
             last_accessed: now,
             expires_at: None,
+            metadata,
         }
     }
 
     /// Create a new stored value with expiration
     pub fn new_with_expiration(value: ValueType, expires_at: Instant) -> Self {
         let now = Instant::now();
+        let metadata = ValueMetadata::for_value(&value);
         Self {
             value,
             created_at: now,
             last_accessed: now,
             expires_at: Some(expires_at),
+            metadata,
         }
     }
 
@@ -659,11 +1076,13 @@ impl StoredValue {
     pub fn new_with_ttl(value: ValueType, ttl_seconds: u64) -> Self {
         let now = Instant::now();
         let expires_at = now + std::time::Duration::from_secs(ttl_seconds);
+        let metadata = ValueMetadata::for_value(&value);
         Self {
             value,
             created_at: now,
             last_accessed: now,
             expires_at: Some(expires_at),
+            metadata,
         }
     }
 
@@ -676,6 +1095,11 @@ impl StoredValue {
     /// Update last accessed time
     pub fn touch(&mut self) {
         self.last_accessed = Instant::now();
+    }
+
+    /// Update metadata after value modification
+    pub fn update_metadata(&mut self) {
+        self.metadata.update_for_value(&self.value);
     }
 
     /// Set expiration time
@@ -775,6 +1199,181 @@ mod tests {
         let int_value = ValueType::Integer(456);
         assert_eq!(int_value.to_string(), "456");
         assert_eq!(int_value.to_integer().unwrap(), 456);
+    }
+
+    // Hash operation tests
+    #[tokio::test]
+    async fn test_hash_operations_basic() {
+        let store = MemoryStore::new();
+
+        // Test HSET
+        let result = store.hset("myhash", "field1", "value1").await.unwrap();
+        assert!(result); // New field
+
+        let result = store.hset("myhash", "field1", "value2").await.unwrap();
+        assert!(!result); // Updated existing field
+
+        // Test HGET
+        let value = store.hget("myhash", "field1").await.unwrap();
+        assert_eq!(value, Some("value2".to_string()));
+
+        let value = store.hget("myhash", "nonexistent").await.unwrap();
+        assert_eq!(value, None);
+
+        // Test HEXISTS
+        let exists = store.hexists("myhash", "field1").await.unwrap();
+        assert!(exists);
+
+        let exists = store.hexists("myhash", "nonexistent").await.unwrap();
+        assert!(!exists);
+
+        // Test HGETALL
+        store.hset("myhash", "field2", "value3").await.unwrap();
+        let all_fields = store.hgetall("myhash").await.unwrap();
+        assert_eq!(all_fields.len(), 2);
+        
+        let mut field_map = std::collections::HashMap::new();
+        for (field, value) in all_fields {
+            field_map.insert(field, value);
+        }
+        assert_eq!(field_map.get("field1"), Some(&"value2".to_string()));
+        assert_eq!(field_map.get("field2"), Some(&"value3".to_string()));
+
+        // Test HDEL
+        let deleted = store.hdel("myhash", "field1").await.unwrap();
+        assert!(deleted);
+
+        let deleted = store.hdel("myhash", "nonexistent").await.unwrap();
+        assert!(!deleted);
+
+        // Verify field was deleted
+        let value = store.hget("myhash", "field1").await.unwrap();
+        assert_eq!(value, None);
+
+        // Verify other field still exists
+        let value = store.hget("myhash", "field2").await.unwrap();
+        assert_eq!(value, Some("value3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_hash_operations_type_safety() {
+        let store = MemoryStore::new();
+
+        // Set a string value first
+        store.set("mykey", "string_value").await.unwrap();
+
+        // Try to use hash operations on string key
+        let result = store.hset("mykey", "field1", "value1").await;
+        assert!(result.is_err());
+
+        let result = store.hget("mykey", "field1").await;
+        assert!(result.is_err());
+
+        let result = store.hdel("mykey", "field1").await;
+        assert!(result.is_err());
+
+        let result = store.hexists("mykey", "field1").await;
+        assert!(result.is_err());
+
+        let result = store.hgetall("mykey").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_hash_operations_with_expiration() {
+        let store = MemoryStore::new();
+
+        // Create hash with expiration
+        store.hset("myhash", "field1", "value1").await.unwrap();
+        let expires_at = std::time::Instant::now() + std::time::Duration::from_millis(1);
+        store.set_with_expiration("myhash", ValueType::Hash({
+            let mut hash = HashMap::new();
+            hash.insert("field1".to_string(), "value1".to_string());
+            hash
+        }), expires_at).await.unwrap();
+
+        // Wait for expiration
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // All hash operations should return empty/false for expired key
+        let value = store.hget("myhash", "field1").await.unwrap();
+        assert_eq!(value, None);
+
+        let exists = store.hexists("myhash", "field1").await.unwrap();
+        assert!(!exists);
+
+        let all_fields = store.hgetall("myhash").await.unwrap();
+        assert!(all_fields.is_empty());
+
+        let deleted = store.hdel("myhash", "field1").await.unwrap();
+        assert!(!deleted);
+
+        // HSET should create new hash after expiration
+        let result = store.hset("myhash", "field2", "value2").await.unwrap();
+        assert!(result); // New field in new hash
+    }
+
+    #[tokio::test]
+    async fn test_hash_operations_empty_hash_cleanup() {
+        let store = MemoryStore::new();
+
+        // Create hash with single field
+        store.hset("myhash", "field1", "value1").await.unwrap();
+        assert!(store.exists("myhash").unwrap());
+
+        // Delete the only field - should remove the entire key
+        let deleted = store.hdel("myhash", "field1").await.unwrap();
+        assert!(deleted);
+
+        // Key should no longer exist
+        assert!(!store.exists("myhash").unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_hash_operations() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let store = Arc::new(MemoryStore::new());
+        let mut join_set = JoinSet::new();
+
+        // Spawn multiple tasks performing hash operations concurrently
+        for i in 0..10 {
+            let store_clone = Arc::clone(&store);
+            join_set.spawn(async move {
+                let hash_key = format!("hash{}", i % 3); // Use 3 different hash keys
+                let field = format!("field{i}");
+                let value = format!("value{i}");
+
+                // HSET
+                let _result = store_clone.hset(&hash_key, &field, &value).await.unwrap();
+                // Could be true or false depending on timing
+
+                // HGET
+                let retrieved = store_clone.hget(&hash_key, &field).await.unwrap();
+                assert_eq!(retrieved, Some(value));
+
+                // HEXISTS
+                let exists = store_clone.hexists(&hash_key, &field).await.unwrap();
+                assert!(exists);
+
+                // HGETALL
+                let all_fields = store_clone.hgetall(&hash_key).await.unwrap();
+                assert!(!all_fields.is_empty());
+            });
+        }
+
+        // Wait for all tasks to complete
+        while let Some(result) = join_set.join_next().await {
+            result.unwrap(); // Panic if any task failed
+        }
+
+        // Verify final state
+        for i in 0..3 {
+            let hash_key = format!("hash{i}");
+            let all_fields = store.hgetall(&hash_key).await.unwrap();
+            assert!(!all_fields.is_empty());
+        }
     }
 
     #[test]
