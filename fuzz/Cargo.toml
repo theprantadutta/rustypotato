@@ -1,0 +1,44 @@
+[package]
+name = "rustypotato-fuzz"
+version = "0.0.0"
+authors = ["Automated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.rustypotato]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "protocol_decode"
+path = "fuzz_targets/protocol_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "command_execution"
+path = "fuzz_targets/command_execution.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resp_roundtrip"
+path = "fuzz_targets/resp_roundtrip.rs"
+test = false
+doc = false
+bench = false
