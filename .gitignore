@@ -20,3 +20,6 @@ rustypotato.local.toml
 
 # Kiro specifications and steering (project-specific)
 .kiro/
+
+# Claude Code
+.claude/
