@@ -63,7 +63,7 @@ RustyPotato provides all essential Redis functionality with enhanced performance
 
 Advanced data structures and enterprise features:
 
-- **Hash Operations**: HSET, HGET, HDEL, HGETALL for nested data
+- **Hash Operations**: HSET, HGET, HDEL, HGETALL, HEXISTS for nested data (✅ Implemented)
 - **List Operations**: LPUSH, RPUSH, LPOP, RPOP for queues and stacks
 - **Pub/Sub Messaging**: Real-time event-driven communication
 - **LRU Cache Mode**: Memory-bounded operation with intelligent eviction
@@ -699,7 +699,9 @@ rustypotato/
 │   ├── logging.rs           # Logging setup
 │   └── lib.rs               # Library root
 ├── tests/                   # Integration tests
-├── benches/                 # Performance benchmarks
+├── benches/                 # Performance benchmarks (Criterion)
+├── tools/                   # Utility binaries
+│   └── quick_bench.rs       # Human-readable benchmark tool
 ├── docs/                    # Documentation
 ├── docker/                  # Docker configurations
 ├── .kiro/                   # Kiro specifications
@@ -763,16 +765,31 @@ cargo flamegraph --bin rustypotato-server
 
 ### Benchmarks
 
-RustyPotato is designed for high performance with the following characteristics:
+RustyPotato delivers exceptional performance with lock-free concurrent data structures:
 
-| Operation | Throughput | Latency (p99) | Memory Overhead |
-|-----------|------------|---------------|-----------------|
-| SET | 500K+ ops/sec | < 200μs | ~100 bytes/key |
-| GET | 1M+ ops/sec | < 100μs | ~50 bytes/key |
-| INCR/DECR | 400K+ ops/sec | < 150μs | ~80 bytes/key |
-| DEL | 600K+ ops/sec | < 120μs | N/A |
+| Operation | Throughput | Latency (p50) | Latency (p99) |
+|-----------|------------|---------------|---------------|
+| **GET** | **1,137,656 ops/sec** | 800 ns | 1.60 µs |
+| **DELETE** | **884,173 ops/sec** | - | - |
+| **SET** | **499,500 ops/sec** | 1.20 µs | 3.00 µs |
+| **INCR** | **433,839 ops/sec** | - | - |
 
-*Benchmarks run on: Intel i7-12700K, 32GB RAM, NVMe SSD*
+*Benchmarks measured on actual hardware. Results may vary based on system configuration.*
+
+### Quick Performance Check
+
+```bash
+# Run human-readable benchmark report
+cargo run --release --bin quick_bench
+
+# Run detailed Criterion benchmarks
+cargo bench --bench performance_benchmarks
+
+# View HTML reports
+# Open: target/criterion/report/index.html
+```
+
+For complete benchmarking documentation, see [BENCHMARKING.md](BENCHMARKING.md).
 
 ### Performance Tuning
 
@@ -830,16 +847,17 @@ docker stats rustypotato
 Use the included benchmark tools:
 
 ```bash
-# Built-in benchmark
-cargo run --bin rustypotato-benchmark -- \
-  --address 127.0.0.1:6379 \
-  --clients 100 \
-  --requests 100000 \
-  --pipeline 10
+# Quick performance report (human-readable)
+cargo run --release --bin quick_bench
 
-# Redis benchmark compatibility
+# Detailed Criterion benchmarks with statistical analysis
+cargo bench --bench performance_benchmarks
+
+# Redis benchmark compatibility (if redis-benchmark is installed)
 redis-benchmark -h 127.0.0.1 -p 6379 -n 100000 -c 50
 ```
+
+See [BENCHMARKING.md](BENCHMARKING.md) for detailed benchmarking instructions and methodology.
 
 ## 🤝 Contributing
 
