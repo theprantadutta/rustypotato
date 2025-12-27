@@ -978,6 +978,421 @@ impl MemoryStore {
         }
     }
 
+    // ==================== LIST OPERATIONS ====================
+
+    /// Push values to the left (head) of a list
+    /// Creates the list if it doesn't exist
+    /// Returns the new length of the list
+    pub async fn lpush<K>(&self, key: K, values: &[String]) -> Result<i64>
+    where
+        K: Into<String>,
+    {
+        let key_string = key.into();
+
+        // Check if key exists and handle expiration
+        if let Some(entry) = self.data.get(&key_string) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(&key_string)?;
+            }
+        }
+
+        // Use entry API for atomic operation
+        let new_len = match self.data.entry(key_string.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                // Key exists, check if it's a list
+                match &entry.get().value {
+                    ValueType::List(_) => {
+                        // Clone and update the stored value
+                        let mut stored_value = entry.get().clone();
+                        if let Ok(list) = stored_value.value.as_list_mut() {
+                            // Push values in reverse order so first value ends up at head
+                            for value in values.iter().rev() {
+                                list.push_front(value.clone());
+                            }
+                            let len = list.len() as i64;
+                            stored_value.touch();
+                            stored_value.update_metadata();
+                            entry.insert(stored_value);
+                            len
+                        } else {
+                            return Err(RustyPotatoError::StorageError {
+                                message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                                operation: Some("lpush".to_string()),
+                                source: None,
+                            });
+                        }
+                    }
+                    _ => {
+                        return Err(RustyPotatoError::StorageError {
+                            message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                            operation: Some("lpush".to_string()),
+                            source: None,
+                        });
+                    }
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                // Key doesn't exist, create new list
+                let mut list = VecDeque::new();
+                // Push values in reverse order so first value ends up at head
+                for value in values.iter().rev() {
+                    list.push_front(value.clone());
+                }
+                let len = list.len() as i64;
+                let stored_value = StoredValue::new(ValueType::List(list));
+                entry.insert(stored_value);
+                len
+            }
+        };
+
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            if let Some(entry) = self.data.get(&key_string) {
+                persistence.log_set(key_string, entry.value.clone()).await?;
+            }
+        }
+
+        Ok(new_len)
+    }
+
+    /// Push values to the right (tail) of a list
+    /// Creates the list if it doesn't exist
+    /// Returns the new length of the list
+    pub async fn rpush<K>(&self, key: K, values: &[String]) -> Result<i64>
+    where
+        K: Into<String>,
+    {
+        let key_string = key.into();
+
+        // Check if key exists and handle expiration
+        if let Some(entry) = self.data.get(&key_string) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(&key_string)?;
+            }
+        }
+
+        // Use entry API for atomic operation
+        let new_len = match self.data.entry(key_string.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                // Key exists, check if it's a list
+                match &entry.get().value {
+                    ValueType::List(_) => {
+                        // Clone and update the stored value
+                        let mut stored_value = entry.get().clone();
+                        if let Ok(list) = stored_value.value.as_list_mut() {
+                            for value in values {
+                                list.push_back(value.clone());
+                            }
+                            let len = list.len() as i64;
+                            stored_value.touch();
+                            stored_value.update_metadata();
+                            entry.insert(stored_value);
+                            len
+                        } else {
+                            return Err(RustyPotatoError::StorageError {
+                                message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                                operation: Some("rpush".to_string()),
+                                source: None,
+                            });
+                        }
+                    }
+                    _ => {
+                        return Err(RustyPotatoError::StorageError {
+                            message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                            operation: Some("rpush".to_string()),
+                            source: None,
+                        });
+                    }
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                // Key doesn't exist, create new list
+                let mut list = VecDeque::new();
+                for value in values {
+                    list.push_back(value.clone());
+                }
+                let len = list.len() as i64;
+                let stored_value = StoredValue::new(ValueType::List(list));
+                entry.insert(stored_value);
+                len
+            }
+        };
+
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            if let Some(entry) = self.data.get(&key_string) {
+                persistence.log_set(key_string, entry.value.clone()).await?;
+            }
+        }
+
+        Ok(new_len)
+    }
+
+    /// Pop value(s) from the left (head) of a list
+    /// Returns None if key doesn't exist
+    /// Removes the key if the list becomes empty
+    pub async fn lpop<K>(&self, key: K, count: Option<usize>) -> Result<Option<Vec<String>>>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        let count = count.unwrap_or(1);
+
+        // Check if key exists and handle expiration
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(None);
+            }
+        }
+
+        // Check if key exists and is a list
+        let (popped_values, should_remove_key) = if let Some(entry) = self.data.get(key_str) {
+            match &entry.value {
+                ValueType::List(list) => {
+                    let pop_count = count.min(list.len());
+                    let will_be_empty = pop_count >= list.len();
+                    (Some(pop_count), will_be_empty)
+                }
+                _ => {
+                    return Err(RustyPotatoError::StorageError {
+                        message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                        operation: Some("lpop".to_string()),
+                        source: None,
+                    });
+                }
+            }
+        } else {
+            return Ok(None);
+        };
+
+        let pop_count = match popped_values {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+
+        let mut result = Vec::with_capacity(pop_count);
+
+        if should_remove_key {
+            // Pop all values and remove the key
+            if let Some((_, stored_value)) = self.data.remove(key_str) {
+                if let ValueType::List(list) = stored_value.value {
+                    for value in list.into_iter().take(pop_count) {
+                        result.push(value);
+                    }
+                }
+            }
+            self.expiration_index.remove(key_str);
+
+            // Log deletion to persistence
+            if let Some(ref persistence) = self.persistence {
+                persistence.log_delete(key_str.to_string()).await?;
+            }
+        } else {
+            // Pop values and update the list
+            if let Some(mut entry) = self.data.get_mut(key_str) {
+                if let Ok(list) = entry.value.as_list_mut() {
+                    for _ in 0..pop_count {
+                        if let Some(value) = list.pop_front() {
+                            result.push(value);
+                        }
+                    }
+                    entry.touch();
+                    entry.update_metadata();
+                }
+            }
+
+            // Log to persistence
+            if let Some(ref persistence) = self.persistence {
+                if let Some(entry) = self.data.get(key_str) {
+                    persistence.log_set(key_str.to_string(), entry.value.clone()).await?;
+                }
+            }
+        }
+
+        Ok(Some(result))
+    }
+
+    /// Pop value(s) from the right (tail) of a list
+    /// Returns None if key doesn't exist
+    /// Removes the key if the list becomes empty
+    pub async fn rpop<K>(&self, key: K, count: Option<usize>) -> Result<Option<Vec<String>>>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        let count = count.unwrap_or(1);
+
+        // Check if key exists and handle expiration
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(None);
+            }
+        }
+
+        // Check if key exists and is a list
+        let (popped_values, should_remove_key) = if let Some(entry) = self.data.get(key_str) {
+            match &entry.value {
+                ValueType::List(list) => {
+                    let pop_count = count.min(list.len());
+                    let will_be_empty = pop_count >= list.len();
+                    (Some(pop_count), will_be_empty)
+                }
+                _ => {
+                    return Err(RustyPotatoError::StorageError {
+                        message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                        operation: Some("rpop".to_string()),
+                        source: None,
+                    });
+                }
+            }
+        } else {
+            return Ok(None);
+        };
+
+        let pop_count = match popped_values {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+
+        let mut result = Vec::with_capacity(pop_count);
+
+        if should_remove_key {
+            // Pop all values and remove the key
+            if let Some((_, stored_value)) = self.data.remove(key_str) {
+                if let ValueType::List(mut list) = stored_value.value {
+                    for _ in 0..pop_count {
+                        if let Some(value) = list.pop_back() {
+                            result.push(value);
+                        }
+                    }
+                }
+            }
+            self.expiration_index.remove(key_str);
+
+            // Log deletion to persistence
+            if let Some(ref persistence) = self.persistence {
+                persistence.log_delete(key_str.to_string()).await?;
+            }
+        } else {
+            // Pop values and update the list
+            if let Some(mut entry) = self.data.get_mut(key_str) {
+                if let Ok(list) = entry.value.as_list_mut() {
+                    for _ in 0..pop_count {
+                        if let Some(value) = list.pop_back() {
+                            result.push(value);
+                        }
+                    }
+                    entry.touch();
+                    entry.update_metadata();
+                }
+            }
+
+            // Log to persistence
+            if let Some(ref persistence) = self.persistence {
+                if let Some(entry) = self.data.get(key_str) {
+                    persistence.log_set(key_str.to_string(), entry.value.clone()).await?;
+                }
+            }
+        }
+
+        Ok(Some(result))
+    }
+
+    /// Get the length of a list
+    /// Returns 0 if key doesn't exist
+    pub fn llen<K>(&self, key: K) -> Result<i64>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(0);
+            }
+
+            entry.touch();
+
+            match entry.value.as_list() {
+                Ok(list) => Ok(list.len() as i64),
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("llen".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Get a range of elements from a list
+    /// Supports negative indices (-1 = last element, -2 = second last, etc.)
+    /// Returns empty vector if key doesn't exist
+    pub fn lrange<K>(&self, key: K, start: i64, stop: i64) -> Result<Vec<String>>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(Vec::new());
+            }
+
+            entry.touch();
+
+            match entry.value.as_list() {
+                Ok(list) => {
+                    let len = list.len() as i64;
+                    if len == 0 {
+                        return Ok(Vec::new());
+                    }
+
+                    // Normalize negative indices
+                    let normalized_start = if start < 0 {
+                        (len + start).max(0) as usize
+                    } else {
+                        (start as usize).min(list.len())
+                    };
+
+                    let normalized_stop = if stop < 0 {
+                        ((len + stop + 1).max(0)) as usize
+                    } else {
+                        ((stop + 1) as usize).min(list.len())
+                    };
+
+                    if normalized_start >= normalized_stop || normalized_start >= list.len() {
+                        return Ok(Vec::new());
+                    }
+
+                    Ok(list.iter()
+                        .skip(normalized_start)
+                        .take(normalized_stop - normalized_start)
+                        .cloned()
+                        .collect())
+                }
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("lrange".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     /// Get memory usage statistics
     pub fn memory_stats(&self) -> MemoryStats {
         let key_count = self.data.len();
