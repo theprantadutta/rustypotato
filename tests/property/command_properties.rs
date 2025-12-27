@@ -459,7 +459,7 @@ proptest! {
             let ttl_cmd = TtlCommand;
 
             // TTL on non-existent key
-            let result1 = ttl_cmd.execute(&[key.clone()], &store, test_client_id()).await;
+            let result1 = ttl_cmd.execute(std::slice::from_ref(&key), &store, test_client_id()).await;
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, -2);
@@ -471,7 +471,7 @@ proptest! {
             set_cmd.execute(&[key.clone(), value], &store, test_client_id()).await;
 
             // TTL on key without expiration
-            let result2 = ttl_cmd.execute(&[key.clone()], &store, test_client_id()).await;
+            let result2 = ttl_cmd.execute(std::slice::from_ref(&key), &store, test_client_id()).await;
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, -1);
@@ -507,7 +507,7 @@ proptest! {
 
             // SET with 1 arg (needs 2)
             let set_cmd = SetCommand;
-            let result = set_cmd.execute(&[key.clone()], &store, test_client_id()).await;
+            let result = set_cmd.execute(std::slice::from_ref(&key), &store, test_client_id()).await;
             prop_assert!(matches!(result, CommandResult::Error(_)));
 
             // GET with 0 args (needs 1)

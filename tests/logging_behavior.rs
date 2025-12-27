@@ -545,9 +545,9 @@ async fn test_error_handling_in_logging() {
     let result = logging_system.initialize().await;
 
     // May fail depending on permissions, but should handle gracefully
-    if result.is_err() {
+    if let Err(e) = result {
         // Error should be properly formatted
-        let error_msg = format!("{}", result.unwrap_err());
+        let error_msg = format!("{}", e);
         assert!(!error_msg.is_empty());
     }
 }

@@ -165,7 +165,6 @@ async fn test_many_concurrent_connections() {
     let mut handles = vec![];
 
     for i in 0..50 {
-        let addr = addr;
         let barrier = Arc::clone(&barrier);
 
         handles.push(tokio::spawn(async move {
@@ -209,7 +208,6 @@ async fn test_concurrent_incr() {
     let mut handles = vec![];
 
     for _ in 0..20 {
-        let addr = addr;
         let barrier = Arc::clone(&barrier);
 
         handles.push(tokio::spawn(async move {
@@ -277,7 +275,7 @@ async fn test_store_concurrent_operations() {
 
     // Each counter should have been incremented 10 times
     for i in 0..10 {
-        let counter = store.get(&format!("store_counter_{}", i)).unwrap().unwrap();
+        let counter = store.get(format!("store_counter_{}", i)).unwrap().unwrap();
         assert_eq!(
             counter.value.to_integer().unwrap(),
             10,

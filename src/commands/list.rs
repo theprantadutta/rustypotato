@@ -1073,7 +1073,7 @@ mod tests {
 
                 // RPUSH
                 store_clone
-                    .rpush("concurrent_list".to_string(), &[value.clone()])
+                    .rpush("concurrent_list".to_string(), std::slice::from_ref(&value))
                     .await
                     .unwrap();
 

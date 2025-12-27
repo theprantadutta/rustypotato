@@ -449,7 +449,6 @@ async fn test_concurrent_lpush() {
     // 20 concurrent clients pushing elements
     for i in 0..20 {
         let barrier = Arc::clone(&barrier);
-        let addr = addr;
         handles.push(tokio::spawn(async move {
             let mut stream = TcpStream::connect(addr).await.unwrap();
             barrier.wait().await;
@@ -489,7 +488,6 @@ async fn test_concurrent_push_pop() {
     // 10 clients popping, 10 clients pushing
     for i in 0..20 {
         let barrier = Arc::clone(&barrier);
-        let addr = addr;
         handles.push(tokio::spawn(async move {
             let mut stream = TcpStream::connect(addr).await.unwrap();
             barrier.wait().await;

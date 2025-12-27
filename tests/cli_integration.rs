@@ -522,8 +522,8 @@ mod performance_tests {
                 .execute_command("SET", &[key.clone(), value])
                 .await
                 .unwrap();
-            client.execute_command("GET", &[key.clone()]).await.unwrap();
-            client.execute_command("DEL", &[key]).await.unwrap();
+            client.execute_command("GET", std::slice::from_ref(&key)).await.unwrap();
+            client.execute_command("DEL", std::slice::from_ref(&key)).await.unwrap();
         }
 
         let duration = start.elapsed();

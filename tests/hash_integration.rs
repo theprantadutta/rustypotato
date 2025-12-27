@@ -337,7 +337,6 @@ async fn test_concurrent_hash_operations() {
     // 20 concurrent clients setting different fields
     for i in 0..20 {
         let barrier = Arc::clone(&barrier);
-        let addr = addr;
         handles.push(tokio::spawn(async move {
             let mut stream = TcpStream::connect(addr).await.unwrap();
             barrier.wait().await;

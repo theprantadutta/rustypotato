@@ -98,7 +98,7 @@ proptest! {
         // Extract the encoded string
         let encoded_str = String::from_utf8_lossy(&encoded);
         let parts: Vec<&str> = encoded_str.splitn(2, "\r\n").collect();
-        prop_assert!(parts.len() >= 1);
+        prop_assert!(!parts.is_empty());
 
         // Verify length prefix
         let length_str = &parts[0][1..]; // Skip the '$'

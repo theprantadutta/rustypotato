@@ -52,6 +52,7 @@ pub struct RustyPotatoServer {
     command_registry: Arc<CommandRegistry>,
     metrics: Arc<MetricsCollector>,
     pubsub: Arc<PubSubManager>,
+    #[allow(dead_code)] // Reserved for future use (dynamic password updates)
     security_config: Arc<RwLock<config::SecurityConfig>>,
     tcp_server: Option<TcpServer>,
 }
