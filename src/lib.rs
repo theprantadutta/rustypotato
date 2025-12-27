@@ -35,12 +35,14 @@ pub use pubsub::{PubSubManager, PubSubMessage};
 pub use storage::{MemoryStore, StoredValue, ValueType};
 
 use commands::{
-    DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand, HgetCommand,
-    HgetallCommand, HexistsCommand, HsetCommand, IncrCommand, LlenCommand, LpopCommand,
-    LpushCommand, LrangeCommand, PsubscribeCommand, PublishCommand, PunsubscribeCommand,
-    RpopCommand, RpushCommand, SetCommand, SubscribeCommand, TtlCommand, UnsubscribeCommand,
+    AuthCommand, DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand,
+    HgetCommand, HgetallCommand, HexistsCommand, HsetCommand, IncrCommand, LlenCommand,
+    LpopCommand, LpushCommand, LrangeCommand, PsubscribeCommand, PublishCommand,
+    PunsubscribeCommand, RpopCommand, RpushCommand, SetCommand, SubscribeCommand, TtlCommand,
+    UnsubscribeCommand,
 };
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// RustyPotato server instance with fully integrated components
 pub struct RustyPotatoServer {
@@ -49,6 +51,7 @@ pub struct RustyPotatoServer {
     command_registry: Arc<CommandRegistry>,
     metrics: Arc<MetricsCollector>,
     pubsub: Arc<PubSubManager>,
+    security_config: Arc<RwLock<config::SecurityConfig>>,
     tcp_server: Option<TcpServer>,
 }
 
@@ -80,6 +83,9 @@ impl RustyPotatoServer {
     ) -> Result<Self> {
         // Create pub/sub manager
         let pubsub = Arc::new(PubSubManager::new());
+
+        // Create shared security config for AUTH command
+        let security_config = Arc::new(RwLock::new(config.security.clone()));
 
         // Create and populate command registry with all available commands
         let mut command_registry = CommandRegistry::new();
@@ -120,6 +126,9 @@ impl RustyPotatoServer {
         command_registry.register(Box::new(PsubscribeCommand::new(Arc::clone(&pubsub))));
         command_registry.register(Box::new(PunsubscribeCommand::new(Arc::clone(&pubsub))));
 
+        // Register authentication command
+        command_registry.register(Box::new(AuthCommand::new(Arc::clone(&security_config))));
+
         let command_registry = Arc::new(command_registry);
 
         // Create TCP server with all components wired together
@@ -136,6 +145,7 @@ impl RustyPotatoServer {
             command_registry,
             metrics,
             pubsub,
+            security_config,
             tcp_server: Some(tcp_server),
         })
     }
@@ -255,7 +265,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
         let stats = server.stats().await;
 
-        assert_eq!(stats.registered_commands, 24); // 19 base + 5 pub/sub (SUBSCRIBE, UNSUBSCRIBE, PUBLISH, PSUBSCRIBE, PUNSUBSCRIBE)
+        assert_eq!(stats.registered_commands, 25); // 19 base + 5 pub/sub + 1 auth (AUTH)
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -270,7 +280,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 24);
+        assert_eq!(server.command_registry().command_count(), 25);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));

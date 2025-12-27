@@ -5,6 +5,7 @@
 //! atomic operations.
 
 pub mod atomic;
+pub mod auth;
 pub mod hash;
 pub mod list;
 pub mod pubsub;
@@ -16,6 +17,7 @@ pub mod ttl;
 mod integration_tests;
 
 pub use atomic::{DecrCommand, IncrCommand};
+pub use auth::{AuthCommand, is_auth_exempt};
 pub use hash::{HdelCommand, HgetCommand, HgetallCommand, HexistsCommand, HsetCommand};
 pub use list::{LlenCommand, LpopCommand, LpushCommand, LrangeCommand, RpopCommand, RpushCommand};
 pub use pubsub::{

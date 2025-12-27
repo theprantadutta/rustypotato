@@ -9,7 +9,7 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpStream;
@@ -86,6 +86,8 @@ pub struct ClientConnection {
     pub commands_processed: Arc<AtomicU64>,
     pub bytes_read: Arc<AtomicU64>,
     pub bytes_written: Arc<AtomicU64>,
+    /// Whether the client has authenticated (true if no auth required or AUTH succeeded)
+    pub authenticated: Arc<AtomicBool>,
 }
 
 impl ClientConnection {
@@ -102,7 +104,18 @@ impl ClientConnection {
             commands_processed: Arc::new(AtomicU64::new(0)),
             bytes_read: Arc::new(AtomicU64::new(0)),
             bytes_written: Arc::new(AtomicU64::new(0)),
+            authenticated: Arc::new(AtomicBool::new(false)), // Not authenticated by default
         }
+    }
+
+    /// Check if the client is authenticated
+    pub fn is_authenticated(&self) -> bool {
+        self.authenticated.load(Ordering::SeqCst)
+    }
+
+    /// Set the authentication status
+    pub fn set_authenticated(&self, authenticated: bool) {
+        self.authenticated.store(authenticated, Ordering::SeqCst);
     }
 
     /// Update the last activity timestamp

@@ -4,7 +4,7 @@
 //! It handles multiple concurrent client connections, command processing, and
 //! graceful shutdown with connection draining.
 
-use crate::commands::{CommandRegistry, CommandResult};
+use crate::commands::{is_auth_exempt, CommandRegistry, CommandResult};
 use crate::config::Config;
 use crate::error::{Result, RustyPotatoError};
 use crate::metrics::{ConnectionEvent, MetricsCollector, Timer};
@@ -545,6 +545,42 @@ impl TcpServer {
                         remote_addr
                     );
 
+                    // Check authentication before executing command
+                    let requires_auth = config.security.requirepass.is_some();
+                    let is_authenticated = {
+                        let conn = connection.lock().await;
+                        conn.is_authenticated()
+                    };
+
+                    // If auth is required and client is not authenticated
+                    if requires_auth && !is_authenticated && !is_auth_exempt(&command.name) {
+                        debug!(
+                            "Client {} attempted '{}' without authentication",
+                            client_id, command.name
+                        );
+
+                        // Send NOAUTH error
+                        let result = CommandResult::Error(
+                            "NOAUTH Authentication required.".to_string()
+                        );
+                        match Self::send_response(connection, result, config, metrics).await {
+                            Ok(()) => {
+                                commands_processed += 1;
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to send NOAUTH response to client {} from {}: {}",
+                                    client_id, remote_addr, e
+                                );
+                                return Err(e);
+                            }
+                        }
+
+                        // Clear buffer and continue
+                        buffer.clear();
+                        continue;
+                    }
+
                     // Update connection stats
                     {
                         let conn = connection.lock().await;
@@ -556,6 +592,15 @@ impl TcpServer {
                     let timer = Timer::start();
                     let result = command_registry.execute(&command, storage).await;
                     let command_duration = timer.stop();
+
+                    // If this was a successful AUTH command, mark connection as authenticated
+                    if command.name.eq_ignore_ascii_case("AUTH")
+                        && matches!(result, CommandResult::Ok(_))
+                    {
+                        let conn = connection.lock().await;
+                        conn.set_authenticated(true);
+                        debug!("Client {} authenticated successfully", client_id);
+                    }
 
                     // Record command metrics
                     metrics
