@@ -4,7 +4,9 @@
 //! allowing clients to subscribe to channels and receive messages in real-time.
 
 pub mod manager;
+pub mod notifications;
 pub mod pattern;
 
 pub use manager::{PubSubManager, SubscriberState, PubSubMessage};
+pub use notifications::{NotificationManager, NotificationEvent};
 pub use pattern::PatternMatcher;

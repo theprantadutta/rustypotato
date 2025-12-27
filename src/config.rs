@@ -17,6 +17,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub network: NetworkConfig,
     pub logging: LoggingConfig,
+    pub security: SecurityConfig,
 }
 
 /// Server-specific configuration
@@ -71,6 +72,19 @@ pub enum LogFormat {
     Compact,
 }
 
+/// Security configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecurityConfig {
+    /// Password required for authentication (None means no auth required)
+    pub requirepass: Option<String>,
+    /// Keyspace notification events to emit
+    /// K = keyspace events, E = keyevent events
+    /// g = generic commands (DEL, EXPIRE), $ = string commands, l = list commands
+    /// h = hash commands, x = expired events, A = all events
+    /// Empty string = disabled
+    pub notify_keyspace_events: String,
+}
+
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -115,6 +129,7 @@ impl Default for LoggingConfig {
         }
     }
 }
+
 
 impl Config {
     /// Load configuration from multiple sources with precedence:
@@ -213,6 +228,9 @@ impl Config {
 
         // Validate logging configuration
         self.logging.validate()?;
+
+        // Validate security configuration
+        self.security.validate()?;
 
         Ok(())
     }
@@ -390,6 +408,86 @@ impl LoggingConfig {
         }
 
         Ok(())
+    }
+}
+
+impl SecurityConfig {
+    fn validate(&self) -> Result<()> {
+        // Validate notify_keyspace_events flags
+        let valid_flags = "KEg$lhsxeA";
+        for c in self.notify_keyspace_events.chars() {
+            if !valid_flags.contains(c) {
+                return Err(RustyPotatoError::ConfigError {
+                    message: format!(
+                        "Invalid notify_keyspace_events flag: '{}'. Valid flags are: K, E, g, $, l, h, s, x, e, A",
+                        c
+                    ),
+                    config_key: Some("security.notify_keyspace_events".to_string()),
+                    source: None,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if keyspace notifications are enabled
+    pub fn notifications_enabled(&self) -> bool {
+        !self.notify_keyspace_events.is_empty()
+    }
+
+    /// Check if keyspace events should be emitted
+    pub fn emit_keyspace_events(&self) -> bool {
+        self.notify_keyspace_events.contains('K')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if keyevent events should be emitted
+    pub fn emit_keyevent_events(&self) -> bool {
+        self.notify_keyspace_events.contains('E')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if generic command events should be emitted (DEL, EXPIRE, etc.)
+    pub fn emit_generic_events(&self) -> bool {
+        self.notify_keyspace_events.contains('g')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if string command events should be emitted (SET, etc.)
+    pub fn emit_string_events(&self) -> bool {
+        self.notify_keyspace_events.contains('$')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if list command events should be emitted (LPUSH, RPUSH, etc.)
+    pub fn emit_list_events(&self) -> bool {
+        self.notify_keyspace_events.contains('l')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if hash command events should be emitted (HSET, HDEL, etc.)
+    pub fn emit_hash_events(&self) -> bool {
+        self.notify_keyspace_events.contains('h')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if set command events should be emitted
+    pub fn emit_set_events(&self) -> bool {
+        self.notify_keyspace_events.contains('s')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if expired events should be emitted
+    pub fn emit_expired_events(&self) -> bool {
+        self.notify_keyspace_events.contains('x')
+            || self.notify_keyspace_events.contains('A')
+    }
+
+    /// Check if evicted events should be emitted
+    pub fn emit_evicted_events(&self) -> bool {
+        self.notify_keyspace_events.contains('e')
+            || self.notify_keyspace_events.contains('A')
     }
 }
 
