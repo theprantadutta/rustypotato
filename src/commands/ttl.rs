@@ -3,6 +3,7 @@
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
+use uuid::Uuid;
 
 /// EXPIRE command implementation
 /// Sets a timeout on a key. After the timeout has expired, the key will automatically be deleted.
@@ -10,7 +11,7 @@ pub struct ExpireCommand;
 
 #[async_trait]
 impl Command for ExpireCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() != 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'EXPIRE' command".to_string(),
@@ -52,7 +53,7 @@ pub struct TtlCommand;
 
 #[async_trait]
 impl Command for TtlCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'TTL' command".to_string(),
@@ -81,10 +82,15 @@ mod tests {
     use crate::commands::ResponseValue;
     use crate::storage::MemoryStore;
     use std::time::Duration;
+    use uuid::Uuid;
 
     // Helper function to create a test store
     fn create_test_store() -> MemoryStore {
         MemoryStore::new()
+    }
+
+    fn test_client_id() -> Uuid {
+        Uuid::new_v4()
     }
 
     // EXPIRE command tests
@@ -96,7 +102,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["test_key".to_string(), "60".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(1)) => {
@@ -120,7 +126,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["nonexistent_key".to_string(), "60".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(0)) => {
@@ -138,7 +144,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["test_key".to_string(), "0".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(1)) => {
@@ -163,7 +169,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["test_key".to_string(), "2147483647".to_string()]; // Large but valid u64
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(1)) => {
@@ -184,7 +190,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["test_key".to_string(), "not_a_number".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -202,7 +208,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["test_key".to_string(), "-1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -218,7 +224,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["only_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -234,7 +240,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["key".to_string(), "60".to_string(), "extra".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -263,7 +269,7 @@ mod tests {
         let cmd = ExpireCommand;
         let args = vec!["test_key".to_string(), "30".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(1)) => {
@@ -299,7 +305,7 @@ mod tests {
         let cmd = TtlCommand;
         let args = vec!["test_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
@@ -320,7 +326,7 @@ mod tests {
         let cmd = TtlCommand;
         let args = vec!["test_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(-1)) => {
@@ -337,7 +343,7 @@ mod tests {
         let cmd = TtlCommand;
         let args = vec!["nonexistent_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(-2)) => {
@@ -364,7 +370,7 @@ mod tests {
         let cmd = TtlCommand;
         let args = vec!["expired_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(-2)) => {
@@ -380,7 +386,7 @@ mod tests {
         let cmd = TtlCommand;
         let args = vec![];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -396,7 +402,7 @@ mod tests {
         let cmd = TtlCommand;
         let args = vec!["key1".to_string(), "key2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -422,17 +428,17 @@ mod tests {
         // Initially no expiration
         let ttl_cmd = TtlCommand;
         let ttl_args = vec!["test_key".to_string()];
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
         assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(-1)));
 
         // Set expiration
         let expire_cmd = ExpireCommand;
         let expire_args = vec!["test_key".to_string(), "30".to_string()];
-        let result = expire_cmd.execute(&expire_args, &store).await;
+        let result = expire_cmd.execute(&expire_args, &store, test_client_id()).await;
         assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(1)));
 
         // Check TTL is now positive
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
@@ -452,12 +458,12 @@ mod tests {
         // Set 5 second expiration
         let expire_cmd = ExpireCommand;
         let expire_args = vec!["test_key".to_string(), "5".to_string()];
-        expire_cmd.execute(&expire_args, &store).await;
+        expire_cmd.execute(&expire_args, &store, test_client_id()).await;
 
         // Check TTL immediately
         let ttl_cmd = TtlCommand;
         let ttl_args = vec!["test_key".to_string()];
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
@@ -471,7 +477,7 @@ mod tests {
 
         // Wait 1 second and check again
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
@@ -492,12 +498,12 @@ mod tests {
         // Set expiration
         let expire_cmd = ExpireCommand;
         let expire_args = vec!["test_key".to_string(), "60".to_string()];
-        expire_cmd.execute(&expire_args, &store).await;
+        expire_cmd.execute(&expire_args, &store, test_client_id()).await;
 
         // Verify TTL is set
         let ttl_cmd = TtlCommand;
         let ttl_args = vec!["test_key".to_string()];
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(ttl > 0, "Expected positive TTL, got {ttl}");
@@ -510,7 +516,7 @@ mod tests {
 
         // Check if TTL is preserved or reset (depends on implementation)
         // In our current implementation, SET removes expiration
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(-1)) => {
                 // Expected: SET removes expiration in our implementation
@@ -528,12 +534,12 @@ mod tests {
 
         let expire_cmd = ExpireCommand;
         let expire_args = vec!["".to_string(), "60".to_string()];
-        let result = expire_cmd.execute(&expire_args, &store).await;
+        let result = expire_cmd.execute(&expire_args, &store, test_client_id()).await;
         assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(1)));
 
         let ttl_cmd = TtlCommand;
         let ttl_args = vec!["".to_string()];
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(ttl > 0, "Expected positive TTL for empty key, got {ttl}");
@@ -551,13 +557,13 @@ mod tests {
         // Set expiration on unicode key
         let expire_cmd = ExpireCommand;
         let expire_args = vec![unicode_key.to_string(), "45".to_string()];
-        let result = expire_cmd.execute(&expire_args, &store).await;
+        let result = expire_cmd.execute(&expire_args, &store, test_client_id()).await;
         assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(1)));
 
         // Check TTL for unicode key
         let ttl_cmd = TtlCommand;
         let ttl_args = vec![unicode_key.to_string()];
-        let result = ttl_cmd.execute(&ttl_args, &store).await;
+        let result = ttl_cmd.execute(&ttl_args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(ttl)) => {
                 assert!(
@@ -594,13 +600,13 @@ mod tests {
 
                 let expire_cmd = ExpireCommand;
                 let expire_args = vec![key.clone(), ttl.to_string()];
-                let result = expire_cmd.execute(&expire_args, &store_clone).await;
+                let result = expire_cmd.execute(&expire_args, &store_clone, test_client_id()).await;
                 assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(1)));
 
                 // Check TTL
                 let ttl_cmd = TtlCommand;
                 let ttl_args = vec![key.clone()];
-                let result = ttl_cmd.execute(&ttl_args, &store_clone).await;
+                let result = ttl_cmd.execute(&ttl_args, &store_clone, test_client_id()).await;
                 match result {
                     CommandResult::Ok(ResponseValue::Integer(actual_ttl)) => {
                         assert!(

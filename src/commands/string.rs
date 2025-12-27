@@ -3,6 +3,7 @@
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
+use uuid::Uuid;
 
 /// SET command implementation
 /// Sets a key to hold the string value
@@ -10,7 +11,7 @@ pub struct SetCommand;
 
 #[async_trait]
 impl Command for SetCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() != 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'SET' command".to_string(),
@@ -41,7 +42,7 @@ pub struct GetCommand;
 
 #[async_trait]
 impl Command for GetCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'GET' command".to_string(),
@@ -74,7 +75,7 @@ pub struct DelCommand;
 
 #[async_trait]
 impl Command for DelCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'DEL' command".to_string(),
@@ -109,7 +110,7 @@ pub struct ExistsCommand;
 
 #[async_trait]
 impl Command for ExistsCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'EXISTS' command".to_string(),
@@ -142,10 +143,16 @@ mod tests {
     use super::*;
     use crate::commands::ResponseValue;
     use crate::storage::MemoryStore;
+    use uuid::Uuid;
 
     // Helper function to create a test store
     fn create_test_store() -> MemoryStore {
         MemoryStore::new()
+    }
+
+    // Helper function to create a test client ID
+    fn test_client_id() -> Uuid {
+        Uuid::new_v4()
     }
 
     // SET command tests
@@ -155,7 +162,7 @@ mod tests {
         let cmd = SetCommand;
         let args = vec!["test_key".to_string(), "test_value".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::SimpleString(msg)) => {
@@ -176,7 +183,7 @@ mod tests {
 
         // Set initial value
         let args1 = vec!["key1".to_string(), "value1".to_string()];
-        let result1 = cmd.execute(&args1, &store).await;
+        let result1 = cmd.execute(&args1, &store, test_client_id()).await;
         assert!(matches!(
             result1,
             CommandResult::Ok(ResponseValue::SimpleString(_))
@@ -184,7 +191,7 @@ mod tests {
 
         // Overwrite with new value
         let args2 = vec!["key1".to_string(), "value2".to_string()];
-        let result2 = cmd.execute(&args2, &store).await;
+        let result2 = cmd.execute(&args2, &store, test_client_id()).await;
         assert!(matches!(
             result2,
             CommandResult::Ok(ResponseValue::SimpleString(_))
@@ -201,7 +208,7 @@ mod tests {
         let cmd = SetCommand;
         let args = vec!["only_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -217,7 +224,7 @@ mod tests {
         let cmd = SetCommand;
         let args = vec!["key".to_string(), "value".to_string(), "extra".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -233,7 +240,7 @@ mod tests {
         let cmd = SetCommand;
         let args = vec!["".to_string(), "".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::SimpleString(msg)) => {
@@ -263,7 +270,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec!["test_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
@@ -279,7 +286,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec!["nonexistent_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(None)) => {
@@ -297,7 +304,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec!["int_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
@@ -313,7 +320,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec![];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -329,7 +336,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec!["key1".to_string(), "key2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -347,7 +354,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec!["".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
@@ -373,7 +380,7 @@ mod tests {
         let cmd = DelCommand;
         let args = vec!["key1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -392,7 +399,7 @@ mod tests {
         let cmd = DelCommand;
         let args = vec!["nonexistent".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -417,7 +424,7 @@ mod tests {
             "key3".to_string(),
         ];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -440,7 +447,7 @@ mod tests {
         let cmd = DelCommand;
         let args = vec!["key1".to_string(), "key1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -456,7 +463,7 @@ mod tests {
         let cmd = DelCommand;
         let args = vec![];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -482,7 +489,7 @@ mod tests {
         let cmd = ExistsCommand;
         let args = vec!["key1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -498,7 +505,7 @@ mod tests {
         let cmd = ExistsCommand;
         let args = vec!["nonexistent".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -517,7 +524,7 @@ mod tests {
         let cmd = ExistsCommand;
         let args = vec!["key1".to_string(), "key2".to_string(), "key3".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -535,7 +542,7 @@ mod tests {
         let cmd = ExistsCommand;
         let args = vec!["key1".to_string(), "key1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -551,7 +558,7 @@ mod tests {
         let cmd = ExistsCommand;
         let args = vec![];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -586,7 +593,7 @@ mod tests {
         let cmd = GetCommand;
         let args = vec!["expired_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(None)) => {
@@ -613,7 +620,7 @@ mod tests {
         let cmd = ExistsCommand;
         let args = vec!["expired_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -640,7 +647,7 @@ mod tests {
         let cmd = DelCommand;
         let args = vec!["expired_key".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
@@ -661,7 +668,7 @@ mod tests {
         let unicode_value = "🎯 测试值";
         let args = vec![unicode_key.to_string(), unicode_value.to_string()];
 
-        let result = set_cmd.execute(&args, &store).await;
+        let result = set_cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(
             result,
             CommandResult::Ok(ResponseValue::SimpleString(_))
@@ -671,7 +678,7 @@ mod tests {
         let get_cmd = GetCommand;
         let args = vec![unicode_key.to_string()];
 
-        let result = get_cmd.execute(&args, &store).await;
+        let result = get_cmd.execute(&args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
                 assert_eq!(value, unicode_value);
@@ -683,7 +690,7 @@ mod tests {
         let exists_cmd = ExistsCommand;
         let args = vec![unicode_key.to_string()];
 
-        let result = exists_cmd.execute(&args, &store).await;
+        let result = exists_cmd.execute(&args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
                 assert_eq!(count, 1);
@@ -695,7 +702,7 @@ mod tests {
         let del_cmd = DelCommand;
         let args = vec![unicode_key.to_string()];
 
-        let result = del_cmd.execute(&args, &store).await;
+        let result = del_cmd.execute(&args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::Integer(count)) => {
                 assert_eq!(count, 1);
@@ -716,7 +723,7 @@ mod tests {
         let set_cmd = SetCommand;
         let args = vec![long_key.clone(), long_value.clone()];
 
-        let result = set_cmd.execute(&args, &store).await;
+        let result = set_cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(
             result,
             CommandResult::Ok(ResponseValue::SimpleString(_))
@@ -726,7 +733,7 @@ mod tests {
         let get_cmd = GetCommand;
         let args = vec![long_key.clone()];
 
-        let result = get_cmd.execute(&args, &store).await;
+        let result = get_cmd.execute(&args, &store, test_client_id()).await;
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
                 assert_eq!(value, long_value);
@@ -754,7 +761,7 @@ mod tests {
                 // SET
                 let set_cmd = SetCommand;
                 let args = vec![key.clone(), value.clone()];
-                let result = set_cmd.execute(&args, &store_clone).await;
+                let result = set_cmd.execute(&args, &store_clone, test_client_id()).await;
                 assert!(matches!(
                     result,
                     CommandResult::Ok(ResponseValue::SimpleString(_))
@@ -763,7 +770,7 @@ mod tests {
                 // GET
                 let get_cmd = GetCommand;
                 let args = vec![key.clone()];
-                let result = get_cmd.execute(&args, &store_clone).await;
+                let result = get_cmd.execute(&args, &store_clone, test_client_id()).await;
                 match result {
                     CommandResult::Ok(ResponseValue::BulkString(Some(retrieved_value))) => {
                         assert_eq!(retrieved_value, value);
@@ -774,7 +781,7 @@ mod tests {
                 // EXISTS
                 let exists_cmd = ExistsCommand;
                 let args = vec![key.clone()];
-                let result = exists_cmd.execute(&args, &store_clone).await;
+                let result = exists_cmd.execute(&args, &store_clone, test_client_id()).await;
                 match result {
                     CommandResult::Ok(ResponseValue::Integer(count)) => {
                         assert_eq!(count, 1);

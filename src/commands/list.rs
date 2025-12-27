@@ -3,6 +3,7 @@
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
+use uuid::Uuid;
 
 /// LPUSH command implementation
 /// Insert all the specified values at the head of the list stored at key
@@ -10,7 +11,7 @@ pub struct LpushCommand;
 
 #[async_trait]
 impl Command for LpushCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() < 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'LPUSH' command".to_string(),
@@ -41,7 +42,7 @@ pub struct RpushCommand;
 
 #[async_trait]
 impl Command for RpushCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() < 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'RPUSH' command".to_string(),
@@ -72,7 +73,7 @@ pub struct LpopCommand;
 
 #[async_trait]
 impl Command for LpopCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.is_empty() || args.len() > 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'LPOP' command".to_string(),
@@ -134,7 +135,7 @@ pub struct RpopCommand;
 
 #[async_trait]
 impl Command for RpopCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.is_empty() || args.len() > 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'RPOP' command".to_string(),
@@ -196,7 +197,7 @@ pub struct LlenCommand;
 
 #[async_trait]
 impl Command for LlenCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'LLEN' command".to_string(),
@@ -226,7 +227,7 @@ pub struct LrangeCommand;
 
 #[async_trait]
 impl Command for LrangeCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: &[String], store: &MemoryStore, _client_id: Uuid) -> CommandResult {
         if args.len() != 3 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'LRANGE' command".to_string(),
@@ -276,10 +277,15 @@ impl Command for LrangeCommand {
 mod tests {
     use super::*;
     use crate::storage::MemoryStore;
+    use uuid::Uuid;
 
     // Helper function to create a test store
     fn create_test_store() -> MemoryStore {
         MemoryStore::new()
+    }
+
+    fn test_client_id() -> Uuid {
+        Uuid::new_v4()
     }
 
     // ==================== LPUSH Command Tests ====================
@@ -290,7 +296,7 @@ mod tests {
         let cmd = LpushCommand;
         let args = vec!["mylist".to_string(), "value1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -315,7 +321,7 @@ mod tests {
             "value3".to_string(),
         ];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -336,11 +342,11 @@ mod tests {
 
         // Push initial values
         let args1 = vec!["mylist".to_string(), "value1".to_string()];
-        cmd.execute(&args1, &store).await;
+        cmd.execute(&args1, &store, test_client_id()).await;
 
         // Push more values
         let args2 = vec!["mylist".to_string(), "value2".to_string()];
-        let result = cmd.execute(&args2, &store).await;
+        let result = cmd.execute(&args2, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -361,7 +367,7 @@ mod tests {
 
         // Too few arguments
         let args = vec!["mylist".to_string()];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -374,7 +380,7 @@ mod tests {
 
         let cmd = LpushCommand;
         let args = vec!["mykey".to_string(), "value1".to_string()];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -394,7 +400,7 @@ mod tests {
         let cmd = RpushCommand;
         let args = vec!["mylist".to_string(), "value1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -418,7 +424,7 @@ mod tests {
             "value3".to_string(),
         ];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -439,11 +445,11 @@ mod tests {
 
         // Push initial values
         let args1 = vec!["mylist".to_string(), "value1".to_string()];
-        cmd.execute(&args1, &store).await;
+        cmd.execute(&args1, &store, test_client_id()).await;
 
         // Push more values
         let args2 = vec!["mylist".to_string(), "value2".to_string()];
-        let result = cmd.execute(&args2, &store).await;
+        let result = cmd.execute(&args2, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -463,7 +469,7 @@ mod tests {
         let cmd = RpushCommand;
 
         let args = vec!["mylist".to_string()];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -489,7 +495,7 @@ mod tests {
         let cmd = LpopCommand;
         let args = vec!["mylist".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
@@ -518,7 +524,7 @@ mod tests {
         let cmd = LpopCommand;
         let args = vec!["mylist".to_string(), "2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -540,7 +546,7 @@ mod tests {
         let cmd = LpopCommand;
         let args = vec!["nonexistent".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(None)) => {
@@ -556,7 +562,7 @@ mod tests {
         let cmd = LpopCommand;
         let args = vec!["nonexistent".to_string(), "2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -575,7 +581,7 @@ mod tests {
         let cmd = LpopCommand;
         let args = vec!["mylist".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(
             result,
             CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "a"
@@ -591,7 +597,7 @@ mod tests {
         let cmd = LpopCommand;
         let args = vec!["mylist".to_string(), "not_a_number".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -602,12 +608,12 @@ mod tests {
 
         // No arguments
         let args: Vec<String> = vec![];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
         let args = vec!["key".to_string(), "1".to_string(), "extra".to_string()];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -632,7 +638,7 @@ mod tests {
         let cmd = RpopCommand;
         let args = vec!["mylist".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(value))) => {
@@ -660,7 +666,7 @@ mod tests {
         let cmd = RpopCommand;
         let args = vec!["mylist".to_string(), "2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -681,7 +687,7 @@ mod tests {
         let cmd = RpopCommand;
         let args = vec!["nonexistent".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(None)) => {}
@@ -710,7 +716,7 @@ mod tests {
         let cmd = LlenCommand;
         let args = vec!["mylist".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -726,7 +732,7 @@ mod tests {
         let cmd = LlenCommand;
         let args = vec!["nonexistent".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(len)) => {
@@ -744,7 +750,7 @@ mod tests {
         let cmd = LlenCommand;
         let args = vec!["mykey".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -755,12 +761,12 @@ mod tests {
 
         // No arguments
         let args: Vec<String> = vec![];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
         let args = vec!["key".to_string(), "extra".to_string()];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -788,7 +794,7 @@ mod tests {
         let cmd = LrangeCommand;
         let args = vec!["mylist".to_string(), "0".to_string(), "-1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -817,7 +823,7 @@ mod tests {
         let cmd = LrangeCommand;
         let args = vec!["mylist".to_string(), "1".to_string(), "2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -844,7 +850,7 @@ mod tests {
         let cmd = LrangeCommand;
         let args = vec!["mylist".to_string(), "-3".to_string(), "-2".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -868,7 +874,7 @@ mod tests {
         let cmd = LrangeCommand;
         let args = vec!["mylist".to_string(), "0".to_string(), "100".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -884,7 +890,7 @@ mod tests {
         let cmd = LrangeCommand;
         let args = vec!["nonexistent".to_string(), "0".to_string(), "-1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
@@ -902,7 +908,7 @@ mod tests {
         let cmd = LrangeCommand;
         let args = vec!["mykey".to_string(), "0".to_string(), "-1".to_string()];
 
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -916,7 +922,7 @@ mod tests {
             "not_a_number".to_string(),
             "0".to_string(),
         ];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         let args = vec![
@@ -924,7 +930,7 @@ mod tests {
             "0".to_string(),
             "not_a_number".to_string(),
         ];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -935,7 +941,7 @@ mod tests {
 
         // Too few arguments
         let args = vec!["mylist".to_string(), "0".to_string()];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
@@ -945,7 +951,7 @@ mod tests {
             "-1".to_string(),
             "extra".to_string(),
         ];
-        let result = cmd.execute(&args, &store).await;
+        let result = cmd.execute(&args, &store, test_client_id()).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 
@@ -972,25 +978,25 @@ mod tests {
         // Build a list using LPUSH and RPUSH
         // LPUSH mylist a -> [a]
         let result = lpush_cmd
-            .execute(&["mylist".to_string(), "a".to_string()], &store)
+            .execute(&["mylist".to_string(), "a".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // RPUSH mylist b -> [a, b]
         let result = rpush_cmd
-            .execute(&["mylist".to_string(), "b".to_string()], &store)
+            .execute(&["mylist".to_string(), "b".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(2))));
 
         // LPUSH mylist c -> [c, a, b]
         let result = lpush_cmd
-            .execute(&["mylist".to_string(), "c".to_string()], &store)
+            .execute(&["mylist".to_string(), "c".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(3))));
 
         // LLEN mylist -> 3
         let result = llen_cmd
-            .execute(&["mylist".to_string()], &store)
+            .execute(&["mylist".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(3))));
 
@@ -999,6 +1005,7 @@ mod tests {
             .execute(
                 &["mylist".to_string(), "0".to_string(), "-1".to_string()],
                 &store,
+                test_client_id(),
             )
             .await;
         if let CommandResult::Ok(ResponseValue::Array(values)) = result {
@@ -1009,7 +1016,7 @@ mod tests {
 
         // LPOP mylist -> c, list becomes [a, b]
         let result = lpop_cmd
-            .execute(&["mylist".to_string()], &store)
+            .execute(&["mylist".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(
             result,
@@ -1018,7 +1025,7 @@ mod tests {
 
         // RPOP mylist -> b, list becomes [a]
         let result = rpop_cmd
-            .execute(&["mylist".to_string()], &store)
+            .execute(&["mylist".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(
             result,
@@ -1027,13 +1034,13 @@ mod tests {
 
         // LLEN mylist -> 1
         let result = llen_cmd
-            .execute(&["mylist".to_string()], &store)
+            .execute(&["mylist".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // Pop the last element
         let result = lpop_cmd
-            .execute(&["mylist".to_string()], &store)
+            .execute(&["mylist".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(
             result,
@@ -1045,7 +1052,7 @@ mod tests {
 
         // LLEN on nonexistent key -> 0
         let result = llen_cmd
-            .execute(&["mylist".to_string()], &store)
+            .execute(&["mylist".to_string()], &store, test_client_id())
             .await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(0))));
     }

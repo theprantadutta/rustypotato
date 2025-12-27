@@ -16,6 +16,11 @@ use rustypotato::commands::{
 };
 use rustypotato::MemoryStore;
 use std::sync::Arc;
+use uuid::Uuid;
+
+fn test_client_id() -> Uuid {
+    Uuid::new_v4()
+}
 
 /// Strategy for generating valid Redis keys
 fn key_strategy() -> impl Strategy<Value = String> {
@@ -51,7 +56,7 @@ proptest! {
             let cmd = SetCommand;
             let args = vec![key, value];
 
-            let result = cmd.execute(&args, &store).await;
+            let result = cmd.execute(&args, &store, test_client_id()).await;
 
             match result {
                 CommandResult::Ok(ResponseValue::SimpleString(s)) => {
@@ -75,11 +80,11 @@ proptest! {
 
             // SET the value
             let set_args = vec![key.clone(), value.clone()];
-            set_cmd.execute(&set_args, &store).await;
+            set_cmd.execute(&set_args, &store, test_client_id()).await;
 
             // GET the value
             let get_args = vec![key];
-            let result = get_cmd.execute(&get_args, &store).await;
+            let result = get_cmd.execute(&get_args, &store, test_client_id()).await;
 
             match result {
                 CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
@@ -106,11 +111,11 @@ proptest! {
             // Set all keys
             for key in &keys {
                 let args = vec![key.clone(), value.clone()];
-                set_cmd.execute(&args, &store).await;
+                set_cmd.execute(&args, &store, test_client_id()).await;
             }
 
             // Delete all keys
-            let result = del_cmd.execute(&keys, &store).await;
+            let result = del_cmd.execute(&keys, &store, test_client_id()).await;
 
             // Count unique keys (in case of duplicates)
             let unique_keys: std::collections::HashSet<_> = keys.iter().collect();
@@ -141,11 +146,11 @@ proptest! {
             // Set some keys
             for key in &existing_keys {
                 let args = vec![key.clone(), value.clone()];
-                set_cmd.execute(&args, &store).await;
+                set_cmd.execute(&args, &store, test_client_id()).await;
             }
 
             // Check EXISTS
-            let result = exists_cmd.execute(&existing_keys, &store).await;
+            let result = exists_cmd.execute(&existing_keys, &store, test_client_id()).await;
 
             let unique_keys: std::collections::HashSet<_> = existing_keys.iter().collect();
 
@@ -172,7 +177,7 @@ proptest! {
             let args = vec![key];
 
             for expected in 1..=n {
-                let result = incr_cmd.execute(&args, &store).await;
+                let result = incr_cmd.execute(&args, &store, test_client_id()).await;
 
                 match result {
                     CommandResult::Ok(ResponseValue::Integer(v)) => {
@@ -195,7 +200,7 @@ proptest! {
             let args = vec![key];
 
             for expected in 1..=n {
-                let result = decr_cmd.execute(&args, &store).await;
+                let result = decr_cmd.execute(&args, &store, test_client_id()).await;
 
                 match result {
                     CommandResult::Ok(ResponseValue::Integer(v)) => {
@@ -217,11 +222,11 @@ proptest! {
 
             // Set a non-numeric value
             let set_cmd = SetCommand;
-            set_cmd.execute(&[key.clone(), "not_a_number".to_string()], &store).await;
+            set_cmd.execute(&[key.clone(), "not_a_number".to_string()], &store, test_client_id()).await;
 
             // Try to INCR
             let incr_cmd = IncrCommand;
-            let result = incr_cmd.execute(&[key], &store).await;
+            let result = incr_cmd.execute(&[key], &store, test_client_id()).await;
 
             prop_assert!(matches!(result, CommandResult::Error(_)));
             Ok(())
@@ -245,7 +250,7 @@ proptest! {
 
             // First HSET should return 1 (new field)
             let args1 = vec![key.clone(), field.clone(), value1];
-            let result1 = hset_cmd.execute(&args1, &store).await;
+            let result1 = hset_cmd.execute(&args1, &store, test_client_id()).await;
 
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
@@ -256,7 +261,7 @@ proptest! {
 
             // Second HSET should return 0 (update)
             let args2 = vec![key, field, value2];
-            let result2 = hset_cmd.execute(&args2, &store).await;
+            let result2 = hset_cmd.execute(&args2, &store, test_client_id()).await;
 
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
@@ -284,10 +289,10 @@ proptest! {
             let hget_cmd = HgetCommand;
 
             // HSET
-            hset_cmd.execute(&[key.clone(), field.clone(), value.clone()], &store).await;
+            hset_cmd.execute(&[key.clone(), field.clone(), value.clone()], &store, test_client_id()).await;
 
             // HGET
-            let result = hget_cmd.execute(&[key, field], &store).await;
+            let result = hget_cmd.execute(&[key, field], &store, test_client_id()).await;
 
             match result {
                 CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
@@ -315,13 +320,13 @@ proptest! {
 
             // Set all fields
             for field in &fields {
-                hset_cmd.execute(&[key.clone(), field.clone(), value.clone()], &store).await;
+                hset_cmd.execute(&[key.clone(), field.clone(), value.clone()], &store, test_client_id()).await;
             }
 
             // Delete all fields
             let mut args = vec![key];
             args.extend(fields.clone());
-            let result = hdel_cmd.execute(&args, &store).await;
+            let result = hdel_cmd.execute(&args, &store, test_client_id()).await;
 
             let unique_fields: std::collections::HashSet<_> = fields.iter().collect();
 
@@ -351,11 +356,11 @@ proptest! {
 
             // Set all fields
             for (field, value) in &fields {
-                hset_cmd.execute(&[key.clone(), field.clone(), value.clone()], &store).await;
+                hset_cmd.execute(&[key.clone(), field.clone(), value.clone()], &store, test_client_id()).await;
             }
 
             // Get all
-            let result = hgetall_cmd.execute(&[key], &store).await;
+            let result = hgetall_cmd.execute(&[key], &store, test_client_id()).await;
 
             match result {
                 CommandResult::Ok(ResponseValue::Array(arr)) => {
@@ -383,7 +388,7 @@ proptest! {
             let hexists_cmd = HexistsCommand;
 
             // Check non-existent
-            let result1 = hexists_cmd.execute(&[key.clone(), field.clone()], &store).await;
+            let result1 = hexists_cmd.execute(&[key.clone(), field.clone()], &store, test_client_id()).await;
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, 0);
@@ -392,10 +397,10 @@ proptest! {
             }
 
             // Set field
-            hset_cmd.execute(&[key.clone(), field.clone(), value], &store).await;
+            hset_cmd.execute(&[key.clone(), field.clone(), value], &store, test_client_id()).await;
 
             // Check existing
-            let result2 = hexists_cmd.execute(&[key, field], &store).await;
+            let result2 = hexists_cmd.execute(&[key, field], &store, test_client_id()).await;
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, 1);
@@ -419,7 +424,7 @@ proptest! {
             let expire_cmd = ExpireCommand;
 
             // Expire non-existent key
-            let result1 = expire_cmd.execute(&[key.clone(), ttl.to_string()], &store).await;
+            let result1 = expire_cmd.execute(&[key.clone(), ttl.to_string()], &store, test_client_id()).await;
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, 0);
@@ -428,10 +433,10 @@ proptest! {
             }
 
             // Set key
-            set_cmd.execute(&[key.clone(), value], &store).await;
+            set_cmd.execute(&[key.clone(), value], &store, test_client_id()).await;
 
             // Expire existing key
-            let result2 = expire_cmd.execute(&[key, ttl.to_string()], &store).await;
+            let result2 = expire_cmd.execute(&[key, ttl.to_string()], &store, test_client_id()).await;
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, 1);
@@ -454,7 +459,7 @@ proptest! {
             let ttl_cmd = TtlCommand;
 
             // TTL on non-existent key
-            let result1 = ttl_cmd.execute(&[key.clone()], &store).await;
+            let result1 = ttl_cmd.execute(&[key.clone()], &store, test_client_id()).await;
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, -2);
@@ -463,10 +468,10 @@ proptest! {
             }
 
             // Set key without expiration
-            set_cmd.execute(&[key.clone(), value], &store).await;
+            set_cmd.execute(&[key.clone(), value], &store, test_client_id()).await;
 
             // TTL on key without expiration
-            let result2 = ttl_cmd.execute(&[key.clone()], &store).await;
+            let result2 = ttl_cmd.execute(&[key.clone()], &store, test_client_id()).await;
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, -1);
@@ -475,10 +480,10 @@ proptest! {
             }
 
             // Set expiration
-            expire_cmd.execute(&[key.clone(), ttl.to_string()], &store).await;
+            expire_cmd.execute(&[key.clone(), ttl.to_string()], &store, test_client_id()).await;
 
             // TTL on key with expiration
-            let result3 = ttl_cmd.execute(&[key], &store).await;
+            let result3 = ttl_cmd.execute(&[key], &store, test_client_id()).await;
             match result3 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert!(v > 0);
@@ -502,17 +507,17 @@ proptest! {
 
             // SET with 1 arg (needs 2)
             let set_cmd = SetCommand;
-            let result = set_cmd.execute(&[key.clone()], &store).await;
+            let result = set_cmd.execute(&[key.clone()], &store, test_client_id()).await;
             prop_assert!(matches!(result, CommandResult::Error(_)));
 
             // GET with 0 args (needs 1)
             let get_cmd = GetCommand;
-            let result = get_cmd.execute(&[], &store).await;
+            let result = get_cmd.execute(&[], &store, test_client_id()).await;
             prop_assert!(matches!(result, CommandResult::Error(_)));
 
             // HSET with 2 args (needs 3)
             let hset_cmd = HsetCommand;
-            let result = hset_cmd.execute(&[key.clone(), "field".to_string()], &store).await;
+            let result = hset_cmd.execute(&[key.clone(), "field".to_string()], &store, test_client_id()).await;
             prop_assert!(matches!(result, CommandResult::Error(_)));
 
             Ok(())
@@ -538,7 +543,7 @@ mod concurrent_command_tests {
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
                 let cmd = IncrCommand;
-                cmd.execute(&["counter".to_string()], &store).await
+                cmd.execute(&["counter".to_string()], &store, test_client_id()).await
             }));
         }
 
@@ -547,7 +552,7 @@ mod concurrent_command_tests {
         }
 
         let get_cmd = GetCommand;
-        let result = get_cmd.execute(&["counter".to_string()], &store).await;
+        let result = get_cmd.execute(&["counter".to_string()], &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
@@ -572,7 +577,8 @@ mod concurrent_command_tests {
                 let cmd = HsetCommand;
                 cmd.execute(
                     &["hash".to_string(), format!("field_{}", i), format!("value_{}", i)],
-                    &store
+                    &store,
+                    test_client_id(),
                 ).await
             }));
         }
@@ -583,7 +589,7 @@ mod concurrent_command_tests {
 
         // Verify all 50 fields exist
         let hgetall_cmd = HgetallCommand;
-        let result = hgetall_cmd.execute(&["hash".to_string()], &store).await;
+        let result = hgetall_cmd.execute(&["hash".to_string()], &store, test_client_id()).await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(arr)) => {

@@ -15,6 +15,7 @@ pub mod commands;
 pub mod metrics;
 pub mod monitoring;
 pub mod network;
+pub mod pubsub;
 pub mod storage;
 
 // Public API exports
@@ -30,12 +31,14 @@ pub use commands::{CommandRegistry, CommandResult, ResponseValue};
 pub use metrics::{MetricsCollector, MetricsServer};
 pub use monitoring::{HealthChecker, HealthStatus, LogRotationManager, MonitoringServer};
 pub use network::TcpServer;
+pub use pubsub::{PubSubManager, PubSubMessage};
 pub use storage::{MemoryStore, StoredValue, ValueType};
 
 use commands::{
     DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand, HgetCommand,
     HgetallCommand, HexistsCommand, HsetCommand, IncrCommand, LlenCommand, LpopCommand,
-    LpushCommand, LrangeCommand, RpopCommand, RpushCommand, SetCommand, TtlCommand,
+    LpushCommand, LrangeCommand, PsubscribeCommand, PublishCommand, PunsubscribeCommand,
+    RpopCommand, RpushCommand, SetCommand, SubscribeCommand, TtlCommand, UnsubscribeCommand,
 };
 use std::sync::Arc;
 
@@ -45,6 +48,7 @@ pub struct RustyPotatoServer {
     storage: Arc<MemoryStore>,
     command_registry: Arc<CommandRegistry>,
     metrics: Arc<MetricsCollector>,
+    pubsub: Arc<PubSubManager>,
     tcp_server: Option<TcpServer>,
 }
 
@@ -74,6 +78,9 @@ impl RustyPotatoServer {
         storage: Arc<MemoryStore>,
         metrics: Arc<MetricsCollector>,
     ) -> Result<Self> {
+        // Create pub/sub manager
+        let pubsub = Arc::new(PubSubManager::new());
+
         // Create and populate command registry with all available commands
         let mut command_registry = CommandRegistry::new();
 
@@ -106,6 +113,13 @@ impl RustyPotatoServer {
         command_registry.register(Box::new(LlenCommand));
         command_registry.register(Box::new(LrangeCommand));
 
+        // Register pub/sub commands
+        command_registry.register(Box::new(SubscribeCommand::new(Arc::clone(&pubsub))));
+        command_registry.register(Box::new(UnsubscribeCommand::new(Arc::clone(&pubsub))));
+        command_registry.register(Box::new(PublishCommand::new(Arc::clone(&pubsub))));
+        command_registry.register(Box::new(PsubscribeCommand::new(Arc::clone(&pubsub))));
+        command_registry.register(Box::new(PunsubscribeCommand::new(Arc::clone(&pubsub))));
+
         let command_registry = Arc::new(command_registry);
 
         // Create TCP server with all components wired together
@@ -121,6 +135,7 @@ impl RustyPotatoServer {
             storage,
             command_registry,
             metrics,
+            pubsub,
             tcp_server: Some(tcp_server),
         })
     }
@@ -190,6 +205,11 @@ impl RustyPotatoServer {
         &self.metrics
     }
 
+    /// Get a reference to the pub/sub manager
+    pub fn pubsub(&self) -> &PubSubManager {
+        &self.pubsub
+    }
+
     /// Get server statistics
     pub async fn stats(&self) -> ServerStats {
         ServerStats {
@@ -235,10 +255,12 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
         let stats = server.stats().await;
 
-        assert_eq!(stats.registered_commands, 19); // SET, GET, DEL, EXISTS, EXPIRE, TTL, INCR, DECR, HSET, HGET, HDEL, HGETALL, HEXISTS, LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE
+        assert_eq!(stats.registered_commands, 24); // 19 base + 5 pub/sub (SUBSCRIBE, UNSUBSCRIBE, PUBLISH, PSUBSCRIBE, PUNSUBSCRIBE)
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
+        assert!(stats.command_names.contains(&"SUBSCRIBE".to_string()));
+        assert!(stats.command_names.contains(&"PUBLISH".to_string()));
         assert_eq!(stats.config_summary, "127.0.0.1:6379");
     }
 
@@ -248,13 +270,15 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 19);
+        assert_eq!(server.command_registry().command_count(), 24);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));
         assert!(server.command_registry().has_command("HGET"));
         assert!(server.command_registry().has_command("LPUSH"));
         assert!(server.command_registry().has_command("RPUSH"));
+        assert!(server.command_registry().has_command("SUBSCRIBE"));
+        assert!(server.command_registry().has_command("PUBLISH"));
     }
 
     #[tokio::test]

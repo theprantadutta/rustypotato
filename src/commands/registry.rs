@@ -9,7 +9,12 @@ use uuid::Uuid;
 #[async_trait]
 pub trait Command: Send + Sync {
     /// Execute the command with given arguments
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult;
+    async fn execute(
+        &self,
+        args: &[String],
+        store: &MemoryStore,
+        client_id: Uuid,
+    ) -> CommandResult;
 
     /// Get the command name
     fn name(&self) -> &'static str;
@@ -129,7 +134,7 @@ impl CommandRegistry {
                 }
 
                 // Execute the command
-                command.execute(&cmd.args, store).await
+                command.execute(&cmd.args, store, cmd.client_id).await
             }
             None => CommandResult::Error(format!("ERR unknown command '{}'", cmd.name)),
         }
@@ -180,7 +185,12 @@ mod tests {
 
     #[async_trait]
     impl Command for MockCommand {
-        async fn execute(&self, args: &[String], _store: &MemoryStore) -> CommandResult {
+        async fn execute(
+            &self,
+            args: &[String],
+            _store: &MemoryStore,
+            _client_id: Uuid,
+        ) -> CommandResult {
             if self.should_error {
                 CommandResult::Error("Mock error".to_string())
             } else {
