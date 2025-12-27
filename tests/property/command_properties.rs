@@ -39,7 +39,9 @@ fn field_strategy() -> impl Strategy<Value = String> {
 
 /// Strategy for TTL values
 fn ttl_strategy() -> impl Strategy<Value = u64> {
-    1u64..3600u64
+    // Start at 5 seconds to avoid race conditions in CI where short TTLs can expire
+    // before the TTL check runs
+    5u64..3600u64
 }
 
 proptest! {
