@@ -10,6 +10,7 @@ pub mod hash;
 pub mod list;
 pub mod pubsub;
 pub mod registry;
+pub mod set;
 pub mod string;
 pub mod ttl;
 
@@ -20,6 +21,10 @@ pub use atomic::{DecrCommand, IncrCommand};
 pub use auth::{AuthCommand, is_auth_exempt};
 pub use hash::{HdelCommand, HgetCommand, HgetallCommand, HexistsCommand, HsetCommand};
 pub use list::{LlenCommand, LpopCommand, LpushCommand, LrangeCommand, RpopCommand, RpushCommand};
+pub use set::{
+    SaddCommand, ScardCommand, SismemberCommand, SmembersCommand, SpopCommand, SrandmemberCommand,
+    SremCommand,
+};
 pub use pubsub::{
     PsubscribeCommand, PublishCommand, PunsubscribeCommand, SubscribeCommand, UnsubscribeCommand,
 };

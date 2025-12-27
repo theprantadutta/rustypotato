@@ -38,8 +38,9 @@ use commands::{
     AuthCommand, DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand,
     HgetCommand, HgetallCommand, HexistsCommand, HsetCommand, IncrCommand, LlenCommand,
     LpopCommand, LpushCommand, LrangeCommand, PsubscribeCommand, PublishCommand,
-    PunsubscribeCommand, RpopCommand, RpushCommand, SetCommand, SubscribeCommand, TtlCommand,
-    UnsubscribeCommand,
+    PunsubscribeCommand, RpopCommand, RpushCommand, SaddCommand, ScardCommand, SismemberCommand,
+    SmembersCommand, SpopCommand, SrandmemberCommand, SremCommand, SetCommand, SubscribeCommand,
+    TtlCommand, UnsubscribeCommand,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -118,6 +119,15 @@ impl RustyPotatoServer {
         command_registry.register(Box::new(RpopCommand));
         command_registry.register(Box::new(LlenCommand));
         command_registry.register(Box::new(LrangeCommand));
+
+        // Register set commands
+        command_registry.register(Box::new(SaddCommand));
+        command_registry.register(Box::new(SremCommand));
+        command_registry.register(Box::new(SmembersCommand));
+        command_registry.register(Box::new(ScardCommand));
+        command_registry.register(Box::new(SismemberCommand));
+        command_registry.register(Box::new(SpopCommand));
+        command_registry.register(Box::new(SrandmemberCommand));
 
         // Register pub/sub commands
         command_registry.register(Box::new(SubscribeCommand::new(Arc::clone(&pubsub))));
@@ -265,7 +275,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
         let stats = server.stats().await;
 
-        assert_eq!(stats.registered_commands, 25); // 19 base + 5 pub/sub + 1 auth (AUTH)
+        assert_eq!(stats.registered_commands, 32); // 19 base + 5 pub/sub + 1 auth + 7 set
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -280,13 +290,15 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 25);
+        assert_eq!(server.command_registry().command_count(), 32);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));
         assert!(server.command_registry().has_command("HGET"));
         assert!(server.command_registry().has_command("LPUSH"));
         assert!(server.command_registry().has_command("RPUSH"));
+        assert!(server.command_registry().has_command("SADD"));
+        assert!(server.command_registry().has_command("SMEMBERS"));
         assert!(server.command_registry().has_command("SUBSCRIBE"));
         assert!(server.command_registry().has_command("PUBLISH"));
     }

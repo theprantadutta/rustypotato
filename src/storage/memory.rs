@@ -4,7 +4,7 @@ use crate::error::{Result, RustyPotatoError};
 use crate::storage::persistence::{AofCommand, PersistenceManager};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,6 +16,7 @@ pub enum ValueType {
     Integer(i64),
     Hash(HashMap<String, String>),
     List(VecDeque<String>),
+    Set(HashSet<String>),
 }
 
 impl ValueType {
@@ -26,6 +27,7 @@ impl ValueType {
             ValueType::Integer(i) => i.to_string(),
             ValueType::Hash(_) => "(hash)".to_string(),
             ValueType::List(_) => "(list)".to_string(),
+            ValueType::Set(_) => "(set)".to_string(),
         }
     }
 
@@ -36,11 +38,14 @@ impl ValueType {
             ValueType::String(s) => s
                 .parse::<i64>()
                 .map_err(|_| RustyPotatoError::NotAnInteger { value: s.clone() }),
-            ValueType::Hash(_) => Err(RustyPotatoError::NotAnInteger { 
-                value: "hash".to_string() 
+            ValueType::Hash(_) => Err(RustyPotatoError::NotAnInteger {
+                value: "hash".to_string()
             }),
-            ValueType::List(_) => Err(RustyPotatoError::NotAnInteger { 
-                value: "list".to_string() 
+            ValueType::List(_) => Err(RustyPotatoError::NotAnInteger {
+                value: "list".to_string()
+            }),
+            ValueType::Set(_) => Err(RustyPotatoError::NotAnInteger {
+                value: "set".to_string()
             }),
         }
     }
@@ -65,6 +70,11 @@ impl ValueType {
         matches!(self, ValueType::List(_))
     }
 
+    /// Check if value is a set type
+    pub fn is_set(&self) -> bool {
+        matches!(self, ValueType::Set(_))
+    }
+
     /// Get the type name as a string
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -72,6 +82,7 @@ impl ValueType {
             ValueType::Integer(_) => "integer",
             ValueType::Hash(_) => "hash",
             ValueType::List(_) => "list",
+            ValueType::Set(_) => "set",
         }
     }
 
@@ -118,6 +129,30 @@ impl ValueType {
             _ => Err(RustyPotatoError::StorageError {
                 message: format!("Value is not a list, it's a {}", self.type_name()),
                 operation: Some("as_list_mut".to_string()),
+                source: None,
+            }),
+        }
+    }
+
+    /// Get set reference if this is a set type
+    pub fn as_set(&self) -> Result<&HashSet<String>> {
+        match self {
+            ValueType::Set(s) => Ok(s),
+            _ => Err(RustyPotatoError::StorageError {
+                message: format!("Value is not a set, it's a {}", self.type_name()),
+                operation: Some("as_set".to_string()),
+                source: None,
+            }),
+        }
+    }
+
+    /// Get mutable set reference if this is a set type
+    pub fn as_set_mut(&mut self) -> Result<&mut HashSet<String>> {
+        match self {
+            ValueType::Set(s) => Ok(s),
+            _ => Err(RustyPotatoError::StorageError {
+                message: format!("Value is not a set, it's a {}", self.type_name()),
+                operation: Some("as_set_mut".to_string()),
                 source: None,
             }),
         }
@@ -188,6 +223,12 @@ impl From<Vec<String>> for ValueType {
     }
 }
 
+impl From<HashSet<String>> for ValueType {
+    fn from(s: HashSet<String>) -> Self {
+        ValueType::Set(s)
+    }
+}
+
 /// Metadata for complex data types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValueMetadata {
@@ -219,6 +260,12 @@ impl ValueMetadata {
                     .sum::<usize>();
                 (size, l.len())
             },
+            ValueType::Set(s) => {
+                let size = s.iter()
+                    .map(|v| v.len())
+                    .sum::<usize>();
+                (size, s.len())
+            },
         };
 
         Self {
@@ -245,6 +292,12 @@ impl ValueMetadata {
                     .map(|s| s.len())
                     .sum::<usize>();
                 (size, l.len())
+            },
+            ValueType::Set(s) => {
+                let size = s.iter()
+                    .map(|v| v.len())
+                    .sum::<usize>();
+                (size, s.len())
             },
         };
 
@@ -1390,6 +1443,371 @@ impl MemoryStore {
             }
         } else {
             Ok(Vec::new())
+        }
+    }
+
+    // ==================== SET OPERATIONS ====================
+
+    /// Add members to a set
+    /// Creates the set if it doesn't exist
+    /// Returns the count of new members added (not already present)
+    pub async fn sadd<K>(&self, key: K, members: &[String]) -> Result<i64>
+    where
+        K: Into<String>,
+    {
+        let key_string = key.into();
+
+        // Handle expiration
+        if let Some(entry) = self.data.get(&key_string) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(&key_string)?;
+            }
+        }
+
+        let added_count = match self.data.entry(key_string.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                match &entry.get().value {
+                    ValueType::Set(_) => {
+                        let mut stored_value = entry.get().clone();
+                        let mut added = 0i64;
+                        if let Ok(set) = stored_value.value.as_set_mut() {
+                            for member in members {
+                                if set.insert(member.clone()) {
+                                    added += 1;
+                                }
+                            }
+                            stored_value.touch();
+                            stored_value.update_metadata();
+                        }
+                        entry.insert(stored_value);
+                        added
+                    }
+                    _ => {
+                        return Err(RustyPotatoError::StorageError {
+                            message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                            operation: Some("sadd".to_string()),
+                            source: None,
+                        });
+                    }
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let set: HashSet<String> = members.iter().cloned().collect();
+                let added = set.len() as i64;
+                let stored_value = StoredValue::new(ValueType::Set(set));
+                entry.insert(stored_value);
+                added
+            }
+        };
+
+        // Log to persistence
+        if let Some(ref persistence) = self.persistence {
+            if let Some(entry) = self.data.get(&key_string) {
+                persistence.log_set(key_string, entry.value.clone()).await?;
+            }
+        }
+
+        Ok(added_count)
+    }
+
+    /// Remove members from a set
+    /// Returns the count of members removed
+    pub async fn srem<K>(&self, key: K, members: &[String]) -> Result<i64>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        // Handle expiration
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(0);
+            }
+        }
+
+        // Check type and calculate what needs to be removed
+        let (removed_count, should_remove_key) = if let Some(entry) = self.data.get(key_str) {
+            match &entry.value {
+                ValueType::Set(set) => {
+                    let remove_count = members.iter().filter(|m| set.contains(*m)).count() as i64;
+                    let will_be_empty = set.len() as i64 == remove_count;
+                    (remove_count, will_be_empty)
+                }
+                _ => {
+                    return Err(RustyPotatoError::StorageError {
+                        message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                        operation: Some("srem".to_string()),
+                        source: None,
+                    });
+                }
+            }
+        } else {
+            return Ok(0);
+        };
+
+        if removed_count > 0 {
+            if should_remove_key {
+                self.data.remove(key_str);
+                self.expiration_index.remove(key_str);
+
+                if let Some(ref persistence) = self.persistence {
+                    persistence.log_delete(key_str.to_string()).await?;
+                }
+            } else {
+                if let Some(mut entry) = self.data.get_mut(key_str) {
+                    if let Ok(set) = entry.value.as_set_mut() {
+                        for member in members {
+                            set.remove(member);
+                        }
+                        entry.touch();
+                        entry.update_metadata();
+                    }
+                }
+
+                if let Some(ref persistence) = self.persistence {
+                    if let Some(entry) = self.data.get(key_str) {
+                        persistence.log_set(key_str.to_string(), entry.value.clone()).await?;
+                    }
+                }
+            }
+        }
+
+        Ok(removed_count)
+    }
+
+    /// Get all members of a set
+    pub fn smembers<K>(&self, key: K) -> Result<Vec<String>>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(Vec::new());
+            }
+
+            entry.touch();
+
+            match entry.value.as_set() {
+                Ok(set) => Ok(set.iter().cloned().collect()),
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("smembers".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Get cardinality (number of elements) of a set
+    pub fn scard<K>(&self, key: K) -> Result<i64>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(0);
+            }
+
+            entry.touch();
+
+            match entry.value.as_set() {
+                Ok(set) => Ok(set.len() as i64),
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("scard".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Check if member exists in set
+    pub fn sismember<K, M>(&self, key: K, member: M) -> Result<bool>
+    where
+        K: AsRef<str>,
+        M: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+        let member_str = member.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(false);
+            }
+
+            entry.touch();
+
+            match entry.value.as_set() {
+                Ok(set) => Ok(set.contains(member_str)),
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("sismember".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Remove and return random member(s) from set
+    pub async fn spop<K>(&self, key: K, count: Option<usize>) -> Result<Option<Vec<String>>>
+    where
+        K: AsRef<str>,
+    {
+        use rand::seq::IteratorRandom;
+
+        let key_str = key.as_ref();
+        let count = count.unwrap_or(1);
+
+        // Handle expiration
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(None);
+            }
+        }
+
+        // Check if exists and is a set
+        let (pop_count, will_be_empty) = if let Some(entry) = self.data.get(key_str) {
+            match &entry.value {
+                ValueType::Set(set) => {
+                    let actual_count = count.min(set.len());
+                    (actual_count, actual_count >= set.len())
+                }
+                _ => {
+                    return Err(RustyPotatoError::StorageError {
+                        message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                        operation: Some("spop".to_string()),
+                        source: None,
+                    });
+                }
+            }
+        } else {
+            return Ok(None);
+        };
+
+        let mut result = Vec::with_capacity(pop_count);
+
+        if will_be_empty {
+            // Remove all and delete key
+            if let Some((_, stored_value)) = self.data.remove(key_str) {
+                if let ValueType::Set(set) = stored_value.value {
+                    let mut rng = rand::rng();
+                    for member in set.into_iter().choose_multiple(&mut rng, pop_count) {
+                        result.push(member);
+                    }
+                }
+            }
+            self.expiration_index.remove(key_str);
+
+            if let Some(ref persistence) = self.persistence {
+                persistence.log_delete(key_str.to_string()).await?;
+            }
+        } else {
+            // Pop random members
+            if let Some(mut entry) = self.data.get_mut(key_str) {
+                if let Ok(set) = entry.value.as_set_mut() {
+                    let mut rng = rand::rng();
+                    let to_remove: Vec<String> = set.iter()
+                        .choose_multiple(&mut rng, pop_count)
+                        .into_iter()
+                        .cloned()
+                        .collect();
+                    for member in to_remove {
+                        set.remove(&member);
+                        result.push(member);
+                    }
+                    entry.touch();
+                    entry.update_metadata();
+                }
+            }
+
+            if let Some(ref persistence) = self.persistence {
+                if let Some(entry) = self.data.get(key_str) {
+                    persistence.log_set(key_str.to_string(), entry.value.clone()).await?;
+                }
+            }
+        }
+
+        Ok(Some(result))
+    }
+
+    /// Return random member(s) from set without removing
+    pub fn srandmember<K>(&self, key: K, count: Option<i64>) -> Result<Option<Vec<String>>>
+    where
+        K: AsRef<str>,
+    {
+        use rand::seq::IteratorRandom;
+
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(None);
+            }
+
+            entry.touch();
+
+            match entry.value.as_set() {
+                Ok(set) => {
+                    if set.is_empty() {
+                        return Ok(Some(Vec::new()));
+                    }
+
+                    let mut rng = rand::rng();
+
+                    let result = match count {
+                        None => {
+                            // Return single element
+                            set.iter().choose(&mut rng).map(|s| vec![s.clone()]).unwrap_or_default()
+                        }
+                        Some(c) if c >= 0 => {
+                            // Return c distinct elements (no duplicates)
+                            let take_count = (c as usize).min(set.len());
+                            set.iter().choose_multiple(&mut rng, take_count)
+                                .into_iter().cloned().collect()
+                        }
+                        Some(c) => {
+                            // Negative count: allow duplicates
+                            let take_count = (-c) as usize;
+                            let elements: Vec<&String> = set.iter().collect();
+                            (0..take_count)
+                                .filter_map(|_| elements.iter().choose(&mut rng).map(|s| (*s).clone()))
+                                .collect()
+                        }
+                    };
+
+                    Ok(Some(result))
+                }
+                Err(_) => Err(RustyPotatoError::StorageError {
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    operation: Some("srandmember".to_string()),
+                    source: None,
+                }),
+            }
+        } else {
+            Ok(None)
         }
     }
 

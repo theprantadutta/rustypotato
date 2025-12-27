@@ -46,6 +46,9 @@ chrono = { version = "0.4", features = ["serde"] }
 sys-info = "0.9"
 flate2 = "1.0"
 
+# Random number generation for set operations (SPOP, SRANDMEMBER)
+rand = "0.9"
+
 [[bin]]
 name = "rustypotato-server"
 path = "src/bin/server.rs"

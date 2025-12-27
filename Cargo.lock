@@ -1407,6 +1407,7 @@ dependencies = [
  "flate2",
  "futures",
  "proptest",
+ "rand",
  "serde",
  "serde_json",
  "sys-info",
