@@ -361,17 +361,22 @@ impl ConnectionPool {
         connections
     }
 
-    /// Find connections that have been idle for longer than the specified duration
+    /// Find connections that have been idle for longer than the specified
+    /// duration. Uses `try_lock` so this scan never blocks; a connection
+    /// whose mutex is currently held (e.g. the handler is in a read) is
+    /// treated as not-idle for this tick — by definition it's busy.
     pub async fn find_idle_connections(&self, idle_threshold: std::time::Duration) -> Vec<Uuid> {
         let mut idle_connections = Vec::new();
         let now = Instant::now();
 
         for entry in self.connections.iter() {
-            let connection = entry.value().lock().await;
-            let last_activity = connection.get_last_activity().await;
-
-            if now.duration_since(last_activity) > idle_threshold {
-                idle_connections.push(connection.client_id);
+            // try_lock keeps the eviction task non-blocking: if a handler
+            // is mid-read we'll re-check on the next tick.
+            if let Ok(connection) = entry.value().try_lock() {
+                let last_activity = connection.get_last_activity().await;
+                if now.duration_since(last_activity) > idle_threshold {
+                    idle_connections.push(connection.client_id);
+                }
             }
         }
 
@@ -379,17 +384,19 @@ impl ConnectionPool {
     }
 
     /// Close idle connections that haven't seen activity for at least
-    /// `idle_threshold`. Best-effort shuts down the socket so the
-    /// connection handler observes EOF and exits, then removes the
-    /// connection from the pool (which releases the semaphore permit).
-    /// Returns the number of connections evicted.
+    /// `idle_threshold`. Best-effort: if the connection's mutex is busy
+    /// (handler is in a read) we still remove it from the pool — the
+    /// handler will observe the missing entry on its next iteration. If
+    /// we can grab the mutex we also shut the socket down so the read
+    /// returns EOF immediately.
     pub async fn evict_idle(&self, idle_threshold: std::time::Duration) -> usize {
         let idle_ids = self.find_idle_connections(idle_threshold).await;
         let mut evicted = 0usize;
         for client_id in idle_ids {
             if let Some(entry) = self.connections.get(&client_id) {
-                let mut conn = entry.value().lock().await;
-                let _ = conn.stream.shutdown().await;
+                if let Ok(mut conn) = entry.value().try_lock() {
+                    let _ = conn.stream.shutdown().await;
+                }
             }
             if self.remove_connection(client_id).await.is_ok() {
                 evicted += 1;

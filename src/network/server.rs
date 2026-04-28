@@ -422,11 +422,15 @@ impl TcpServer {
         Ok(())
     }
 
-    /// Configure socket options for optimal performance
+    /// Configure socket options for optimal performance.
+    ///
+    /// Uses `socket2::SockRef` to apply `SO_KEEPALIVE` so the OS detects
+    /// dead peers (e.g. crashed clients with no FIN) without waiting for
+    /// the default 2-hour TCP timeout. Defaults: idle 60s, interval 10s,
+    /// retries 6 — i.e. a half-dead connection is reaped in roughly two
+    /// minutes. `set_nodelay` is also applied here when `tcp_nodelay` is
+    /// enabled.
     fn configure_socket(stream: &TcpStream, config: &Config) -> Result<()> {
-        // For now, we'll use tokio's built-in socket configuration
-        // In a production system, we would use socket2 crate for cross-platform socket options
-
         if let Err(e) = stream.set_nodelay(config.network.tcp_nodelay) {
             return Err(RustyPotatoError::NetworkError {
                 message: format!("Failed to set TCP_NODELAY: {e}"),
@@ -435,10 +439,24 @@ impl TcpServer {
             });
         }
 
-        // Note: SO_KEEPALIVE configuration would require socket2 crate
-        // For now, we'll log that it's configured but not actually set it
         if config.network.tcp_keepalive {
-            debug!("TCP keepalive is configured (would be set with socket2 crate in production)");
+            let sock_ref = socket2::SockRef::from(stream);
+            let keepalive = socket2::TcpKeepalive::new()
+                .with_time(Duration::from_secs(60))
+                .with_interval(Duration::from_secs(10));
+            // `with_retries` is unavailable on some platforms; use the
+            // platform-native default count (Linux: 9, macOS: 8) when the
+            // method isn't there. Linux/glibc and recent Windows do
+            // support it, which we annotate here.
+            #[cfg(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd"))]
+            let keepalive = keepalive.with_retries(6);
+            if let Err(e) = sock_ref.set_tcp_keepalive(&keepalive) {
+                return Err(RustyPotatoError::NetworkError {
+                    message: format!("Failed to set SO_KEEPALIVE: {e}"),
+                    source: Some(Box::new(e)),
+                    connection_id: None,
+                });
+            }
         }
 
         Ok(())

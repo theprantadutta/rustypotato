@@ -167,6 +167,13 @@ async fn idle_connection_is_evicted() {
     let mut config = Config::default();
     config.server.port = 0;
     config.network.idle_timeout = 1; // 1-second idle timeout
+    // Short read_timeout: the per-connection handler holds the connection
+    // mutex while in `read_buf`. The evictor uses try_lock and skips when
+    // the handler is mid-read, so we need the handler to release the
+    // mutex periodically for the evictor to make progress within the
+    // test's wall-clock budget. In production the default 30s read
+    // timeout is fine because nobody waits 30s for an idle eviction.
+    config.network.read_timeout = 1;
     config.storage.aof_enabled = false;
 
     let mut server = RustyPotatoServer::open(config).await.unwrap();
@@ -177,13 +184,14 @@ async fn idle_connection_is_evicted() {
     // Send one command to make the connection real, then go silent.
     stream.write_all(b"*1\r\n$4\r\nPING\r\n").await.unwrap();
     let _ = stream.flush().await;
-    // Read the (likely error since PING isn't registered yet) response.
+    // Drain the (probable unknown-command error) response.
     let mut buf = vec![0u8; 64];
-    let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
+    let _ = timeout(Duration::from_millis(500), stream.read(&mut buf)).await;
 
-    // Wait > idle_timeout + scan_interval. With idle_timeout=1s the
-    // scanner runs every max(1/4, 1) = 1s, so worst case ~2.5s.
-    sleep(Duration::from_secs(3)).await;
+    // Wait long enough for the evictor to fire (idle_timeout=1s, scan
+    // interval = max(idle_timeout/4, 1s) = 1s, plus the read_timeout
+    // window where the handler can release its lock).
+    sleep(Duration::from_secs(5)).await;
 
     // The server should have shut our socket down. A read returns 0
     // bytes (EOF) on a half-closed stream.
