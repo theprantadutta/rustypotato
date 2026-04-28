@@ -77,11 +77,11 @@ async fn test_response_formatting() {
     assert_eq!(CliClient::format_response(&response), "OK");
 
     // Test bulk string
-    let response = ResponseValue::BulkString(Some("hello".to_string()));
+    let response = ResponseValue::bulk("hello");
     assert_eq!(CliClient::format_response(&response), "hello");
 
     // Test nil
-    let response = ResponseValue::BulkString(None);
+    let response = ResponseValue::nil_bulk();
     assert_eq!(CliClient::format_response(&response), "(nil)");
 
     let response = ResponseValue::Nil;
@@ -99,7 +99,7 @@ async fn test_response_formatting() {
     let response = ResponseValue::Array(vec![
         ResponseValue::SimpleString("first".to_string()),
         ResponseValue::Integer(2),
-        ResponseValue::BulkString(Some("third".to_string())),
+        ResponseValue::bulk("third"),
     ]);
     let formatted = CliClient::format_response(&response);
     assert!(formatted.contains("1) first"));

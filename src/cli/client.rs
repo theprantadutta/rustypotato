@@ -114,7 +114,7 @@ impl CliClient {
         // Create ResponseValue array from command parts
         let array_elements: Vec<ResponseValue> = parts
             .iter()
-            .map(|part| ResponseValue::BulkString(Some(part.clone())))
+            .map(|part| ResponseValue::bulk(part.clone()))
             .collect();
 
         let response_value = ResponseValue::Array(array_elements);

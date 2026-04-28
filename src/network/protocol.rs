@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn test_encode_bulk_string() {
         let mut codec = RespCodec::new();
-        let value = ResponseValue::BulkString(Some("hello".to_string()));
+        let value = ResponseValue::bulk("hello");
         let result = codec.encode(&value).unwrap();
         assert_eq!(result, b"$5\r\nhello\r\n");
     }

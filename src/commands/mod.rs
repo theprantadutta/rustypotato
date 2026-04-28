@@ -19,7 +19,7 @@ pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};
 
-/// Command execution result types
+/// Command execution result types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResponseValue {
     SimpleString(String),
@@ -27,6 +27,22 @@ pub enum ResponseValue {
     Integer(i64),
     Array(Vec<ResponseValue>),
     Nil,
+}
+
+impl ResponseValue {
+    /// Construct a non-nil bulk string from anything that can be turned
+    /// into a `String`. Migration helper for the upcoming binary-safe
+    /// rework where this type will become `Option<Bytes>` — written this
+    /// way today so call sites can switch to the helper now and the
+    /// underlying type swap becomes a one-line change later.
+    pub fn bulk(s: impl Into<String>) -> Self {
+        Self::BulkString(Some(s.into()))
+    }
+
+    /// The RESP `$-1\r\n` nil response.
+    pub fn nil_bulk() -> Self {
+        Self::BulkString(None)
+    }
 }
 
 /// Command arity specification

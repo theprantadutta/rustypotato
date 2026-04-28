@@ -51,10 +51,10 @@ impl Command for GetCommand {
         let key = &args[0];
 
         match store.get(key) {
-            Ok(Some(stored_value)) => CommandResult::Ok(ResponseValue::BulkString(Some(
-                stored_value.value.to_string(),
-            ))),
-            Ok(None) => CommandResult::Ok(ResponseValue::BulkString(None)), // Redis returns nil for missing keys
+            Ok(Some(stored_value)) => {
+                CommandResult::Ok(ResponseValue::bulk(stored_value.value.to_string()))
+            }
+            Ok(None) => CommandResult::Ok(ResponseValue::nil_bulk()),
             Err(e) => CommandResult::Error(e.to_client_error()),
         }
     }

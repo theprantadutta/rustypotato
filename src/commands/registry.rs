@@ -537,8 +537,8 @@ mod tests {
     #[test]
     fn test_response_value_types() {
         let simple = crate::commands::ResponseValue::SimpleString("OK".to_string());
-        let bulk = crate::commands::ResponseValue::BulkString(Some("value".to_string()));
-        let bulk_nil = crate::commands::ResponseValue::BulkString(None);
+        let bulk = crate::commands::ResponseValue::bulk("value");
+        let bulk_nil = crate::commands::ResponseValue::nil_bulk();
         let integer = crate::commands::ResponseValue::Integer(42);
         let array = crate::commands::ResponseValue::Array(vec![simple.clone()]);
         let nil = crate::commands::ResponseValue::Nil;

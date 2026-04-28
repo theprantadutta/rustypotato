@@ -56,8 +56,8 @@ impl Command for HgetCommand {
         let field = &args[1];
 
         match store.hget(key, field).await {
-            Ok(Some(value)) => CommandResult::Ok(ResponseValue::BulkString(Some(value))),
-            Ok(None) => CommandResult::Ok(ResponseValue::BulkString(None)), // Field doesn't exist
+            Ok(Some(value)) => CommandResult::Ok(ResponseValue::bulk(value)),
+            Ok(None) => CommandResult::Ok(ResponseValue::nil_bulk()),
             Err(e) => CommandResult::Error(e.to_client_error()),
         }
     }
@@ -132,8 +132,8 @@ impl Command for HgetallCommand {
                 // Convert to array of alternating field-value pairs
                 let mut result = Vec::new();
                 for (field, value) in fields {
-                    result.push(ResponseValue::BulkString(Some(field)));
-                    result.push(ResponseValue::BulkString(Some(value)));
+                    result.push(ResponseValue::bulk(field));
+                    result.push(ResponseValue::bulk(value));
                 }
                 CommandResult::Ok(ResponseValue::Array(result))
             }

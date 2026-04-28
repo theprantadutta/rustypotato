@@ -126,11 +126,11 @@ mod response_value_tests {
         assert!(matches!(simple, ResponseValue::SimpleString(_)));
 
         // Bulk string
-        let bulk = ResponseValue::BulkString(Some("value".to_string()));
+        let bulk = ResponseValue::bulk("value");
         assert!(matches!(bulk, ResponseValue::BulkString(Some(_))));
 
         // Null bulk string
-        let null_bulk = ResponseValue::BulkString(None);
+        let null_bulk = ResponseValue::nil_bulk();
         assert!(matches!(null_bulk, ResponseValue::BulkString(None)));
 
         // Integer

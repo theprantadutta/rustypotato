@@ -167,12 +167,12 @@ async fn idle_connection_is_evicted() {
     let mut config = Config::default();
     config.server.port = 0;
     config.network.idle_timeout = 1; // 1-second idle timeout
-    // Short read_timeout: the per-connection handler holds the connection
-    // mutex while in `read_buf`. The evictor uses try_lock and skips when
-    // the handler is mid-read, so we need the handler to release the
-    // mutex periodically for the evictor to make progress within the
-    // test's wall-clock budget. In production the default 30s read
-    // timeout is fine because nobody waits 30s for an idle eviction.
+                                     // Short read_timeout: the per-connection handler holds the connection
+                                     // mutex while in `read_buf`. The evictor uses try_lock and skips when
+                                     // the handler is mid-read, so we need the handler to release the
+                                     // mutex periodically for the evictor to make progress within the
+                                     // test's wall-clock budget. In production the default 30s read
+                                     // timeout is fine because nobody waits 30s for an idle eviction.
     config.network.read_timeout = 1;
     config.storage.aof_enabled = false;
 
