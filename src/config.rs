@@ -44,6 +44,38 @@ pub struct NetworkConfig {
     pub connection_timeout: u64,
     pub read_timeout: u64,
     pub write_timeout: u64,
+    /// Maximum size in bytes of a single RESP bulk string. Matches Redis'
+    /// `proto-max-bulk-len` default of 512 MB. Clients sending a length
+    /// greater than this get a protocol error and the connection closes.
+    #[serde(default = "default_max_bulk_size")]
+    pub max_bulk_size: usize,
+    /// Maximum number of elements in a single RESP array (e.g. variadic
+    /// `MSET`).
+    #[serde(default = "default_max_array_length")]
+    pub max_array_length: usize,
+    /// Maximum bytes a single connection's protocol-decode buffer is
+    /// allowed to grow to before the connection is dropped. Defends
+    /// against slow-loris and malicious clients trickling junk in.
+    #[serde(default = "default_max_buffer_size")]
+    pub max_buffer_size: usize,
+    /// Per-connection idle timeout in seconds. After this much wall-clock
+    /// time without any client activity, the connection is closed by the
+    /// background eviction task.
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout: u64,
+}
+
+fn default_max_bulk_size() -> usize {
+    512 * 1024 * 1024
+}
+fn default_max_array_length() -> usize {
+    1_048_576
+}
+fn default_max_buffer_size() -> usize {
+    64 * 1024 * 1024
+}
+fn default_idle_timeout() -> u64 {
+    300
 }
 
 /// Logging configuration
@@ -100,6 +132,10 @@ impl Default for NetworkConfig {
             connection_timeout: 30,
             read_timeout: 30,
             write_timeout: 30,
+            max_bulk_size: default_max_bulk_size(),
+            max_array_length: default_max_array_length(),
+            max_buffer_size: default_max_buffer_size(),
+            idle_timeout: default_idle_timeout(),
         }
     }
 }

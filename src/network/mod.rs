@@ -8,5 +8,5 @@ pub mod protocol;
 pub mod server;
 
 pub use connection::{ClientConnection, ConnectionPool};
-pub use protocol::{encode_error, RespCodec, RespValue};
+pub use protocol::{encode_error, CodecLimits, RespCodec, RespValue};
 pub use server::TcpServer;

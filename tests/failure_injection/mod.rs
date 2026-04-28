@@ -5,6 +5,7 @@
 //! - Persistence failures (disk errors, corrupted files)
 //! - Resource exhaustion (memory pressure, connection limits)
 
+pub mod dos_hardening;
 pub mod network_failures;
 pub mod persistence_failures;
 pub mod resource_exhaustion;

@@ -8,18 +8,61 @@ use crate::error::{Result, RustyPotatoError};
 use bytes::{Buf, BufMut, BytesMut};
 use std::io::Cursor;
 
+/// Default protocol limits. These match the Redis `proto-max-bulk-len`
+/// default and add reasonable per-connection caps for array length and
+/// the receive buffer. Production callers should override via
+/// `RespCodec::with_limits` using values from `Config::network`.
+pub const DEFAULT_MAX_BULK_SIZE: usize = 512 * 1024 * 1024;
+pub const DEFAULT_MAX_ARRAY_LENGTH: usize = 1_048_576;
+pub const DEFAULT_MAX_BUFFER_SIZE: usize = 64 * 1024 * 1024;
+
+/// Configurable bounds on what the codec accepts from a peer.
+#[derive(Debug, Clone, Copy)]
+pub struct CodecLimits {
+    pub max_bulk_size: usize,
+    pub max_array_length: usize,
+    pub max_buffer_size: usize,
+}
+
+impl Default for CodecLimits {
+    fn default() -> Self {
+        Self {
+            max_bulk_size: DEFAULT_MAX_BULK_SIZE,
+            max_array_length: DEFAULT_MAX_ARRAY_LENGTH,
+            max_buffer_size: DEFAULT_MAX_BUFFER_SIZE,
+        }
+    }
+}
+
 /// Redis RESP protocol codec
 #[derive(Debug, Clone)]
 pub struct RespCodec {
     buffer: BytesMut,
+    limits: CodecLimits,
 }
 
 impl RespCodec {
-    /// Create a new RESP codec
+    /// Create a new RESP codec with default limits.
     pub fn new() -> Self {
+        Self::with_limits(CodecLimits::default())
+    }
+
+    /// Create a codec with custom protocol limits.
+    pub fn with_limits(limits: CodecLimits) -> Self {
         Self {
             buffer: BytesMut::with_capacity(4096),
+            limits,
         }
+    }
+
+    /// Current protocol limits.
+    pub fn limits(&self) -> &CodecLimits {
+        &self.limits
+    }
+
+    /// Bytes currently buffered awaiting more data.
+    pub fn buffered_len(&self) -> usize {
+        self.buffer.len()
     }
 
     /// Encode a ResponseValue into RESP format
@@ -42,6 +85,19 @@ impl RespCodec {
         &mut self,
         data: &[u8],
     ) -> Result<Option<(ParsedCommand, bytes::Bytes)>> {
+        // Reject before allocating: a slow-loris client can keep dripping
+        // bytes into the buffer; the moment the accumulator grows past
+        // `max_buffer_size` we close the connection.
+        if self.buffer.len().saturating_add(data.len()) > self.limits.max_buffer_size {
+            return Err(RustyPotatoError::ProtocolError {
+                message: format!(
+                    "buffer overflow (>{} bytes); closing connection",
+                    self.limits.max_buffer_size
+                ),
+                command: None,
+                source: None,
+            });
+        }
         self.buffer.extend_from_slice(data);
         self.try_parse_command_with_frame()
     }
@@ -225,6 +281,20 @@ impl RespCodec {
 
             let length = length as usize;
 
+            // Refuse outsized bulk strings BEFORE allocating. Without this
+            // a single client can crash the server with `$2147483647\r\n`
+            // (RESP allows any non-negative i32 length).
+            if length > self.limits.max_bulk_size {
+                return Err(RustyPotatoError::ProtocolError {
+                    message: format!(
+                        "bulk string length {length} exceeds max {}",
+                        self.limits.max_bulk_size
+                    ),
+                    command: None,
+                    source: None,
+                });
+            }
+
             // Check if we have enough data for the string + \r\n
             if cursor.remaining() < length + 2 {
                 return Ok(None); // Need more data
@@ -280,6 +350,20 @@ impl RespCodec {
             }
 
             let length = length as usize;
+
+            // Refuse outsized arrays BEFORE allocating the Vec. Without
+            // this a client can request a 2-billion-element Vec.
+            if length > self.limits.max_array_length {
+                return Err(RustyPotatoError::ProtocolError {
+                    message: format!(
+                        "array length {length} exceeds max {}",
+                        self.limits.max_array_length
+                    ),
+                    command: None,
+                    source: None,
+                });
+            }
+
             let mut elements = Vec::with_capacity(length);
 
             for _ in 0..length {

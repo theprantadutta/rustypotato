@@ -133,6 +133,11 @@ impl TcpServer {
         info!("RustyPotato TCP server listening on {}", local_addr);
 
         let shutdown_tx = self.shutdown_tx.clone();
+        Self::spawn_idle_evictor(
+            Arc::clone(&self.connection_pool),
+            self.config.network.idle_timeout,
+            shutdown_tx.subscribe(),
+        );
         self.run_server_loop(listener, shutdown_tx).await
     }
 
@@ -165,6 +170,11 @@ impl TcpServer {
         info!("RustyPotato TCP server listening on {}", local_addr);
 
         let shutdown_tx = self.shutdown_tx.clone();
+        Self::spawn_idle_evictor(
+            Arc::clone(&self.connection_pool),
+            self.config.network.idle_timeout,
+            shutdown_tx.subscribe(),
+        );
 
         // Spawn the server loop in the background
         let storage = Arc::clone(&self.storage);
@@ -190,6 +200,35 @@ impl TcpServer {
         });
 
         Ok(local_addr)
+    }
+
+    /// Background task: every `idle_timeout / 4` seconds, scan the
+    /// connection pool for connections that haven't seen any activity
+    /// within `idle_timeout` and evict them. Exits on shutdown.
+    fn spawn_idle_evictor(
+        pool: Arc<ConnectionPool>,
+        idle_timeout_secs: u64,
+        mut shutdown_rx: broadcast::Receiver<()>,
+    ) {
+        let idle_timeout = Duration::from_secs(idle_timeout_secs);
+        // Scan four times per idle window — fine-grained enough that an
+        // idle client is closed within ~25% of `idle_timeout`, but coarse
+        // enough that the scan cost is negligible.
+        let scan_interval = Duration::from_secs((idle_timeout_secs / 4).max(1));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(scan_interval);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        let _ = pool.evict_idle(idle_timeout).await;
+                    }
+                    _ = shutdown_rx.recv() => {
+                        debug!("Idle evictor task shutting down");
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     /// Run the main server loop
@@ -237,26 +276,27 @@ impl TcpServer {
         addr: SocketAddr,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<()> {
-        // Check connection limits
-        if !self.connection_pool.can_accept_connection().await {
-            warn!(
-                "Connection limit reached ({} active), rejecting connection from {}",
-                self.connection_pool.active_connections().await,
-                addr
-            );
-
-            // Record rejected connection
-            self.metrics
-                .record_connection_event(ConnectionEvent::Rejected)
-                .await;
-
-            // Send a proper error response before closing
-            let error_msg = b"-ERR server connection limit reached\r\n";
-            let _ = stream.write_all(error_msg).await;
-            let _ = stream.flush().await;
-            let _ = stream.shutdown().await;
-            return Ok(());
-        }
+        // Atomically reserve a slot from the semaphore. If we can't, the
+        // pool is at `max_connections`; reject before doing any other
+        // work. Replaces the previous TOCTOU `can_accept` + `add` pair.
+        let permit = match self.connection_pool.try_reserve_slot() {
+            Some(p) => p,
+            None => {
+                warn!(
+                    "Connection limit reached ({} active), rejecting connection from {}",
+                    self.connection_pool.active_connections().await,
+                    addr
+                );
+                self.metrics
+                    .record_connection_event(ConnectionEvent::Rejected)
+                    .await;
+                let error_msg = b"-ERR server connection limit reached\r\n";
+                let _ = stream.write_all(error_msg).await;
+                let _ = stream.flush().await;
+                let _ = stream.shutdown().await;
+                return Ok(());
+            }
+        };
 
         // Configure socket options for better performance
         if let Err(e) = Self::configure_socket(&stream, &self.config) {
@@ -267,8 +307,12 @@ impl TcpServer {
         let client_id = Uuid::new_v4();
         let connection = ClientConnection::new(client_id, stream, addr);
 
-        // Add to connection pool
-        if let Err(e) = self.connection_pool.add_connection(connection).await {
+        // Add to connection pool with the previously-reserved permit
+        if let Err(e) = self
+            .connection_pool
+            .add_connection(connection, permit)
+            .await
+        {
             error!(
                 "Failed to add connection {} from {} to pool: {}",
                 client_id, addr, e
@@ -410,7 +454,11 @@ impl TcpServer {
         persistence: Option<Arc<PersistenceManager>>,
         shutdown_rx: &mut broadcast::Receiver<()>,
     ) -> Result<()> {
-        let mut codec = RespCodec::new();
+        let mut codec = RespCodec::with_limits(crate::network::protocol::CodecLimits {
+            max_bulk_size: config.network.max_bulk_size,
+            max_array_length: config.network.max_array_length,
+            max_buffer_size: config.network.max_buffer_size,
+        });
         let mut buffer = BytesMut::with_capacity(4096);
         let (client_id, remote_addr) = {
             let conn = connection.lock().await;

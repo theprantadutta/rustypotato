@@ -12,8 +12,9 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -181,10 +182,20 @@ pub struct ConnectionInfo {
     pub connection_duration: std::time::Duration,
 }
 
-/// Connection pool for managing multiple clients with limits and statistics
+/// Connection pool for managing multiple clients with limits and statistics.
+///
+/// Slot accounting is done by a `tokio::sync::Semaphore` rather than the
+/// previous check-then-act on a length counter, so the configured
+/// `max_connections` is a hard limit even under bursty concurrent
+/// accepts.
 pub struct ConnectionPool {
     connections: DashMap<Uuid, Arc<tokio::sync::Mutex<ClientConnection>>>,
+    /// Holds the per-connection permit alive for the lifetime of the
+    /// connection. Dropping the permit releases the slot back to the
+    /// semaphore.
+    permits: DashMap<Uuid, OwnedSemaphorePermit>,
     max_connections: usize,
+    semaphore: Arc<Semaphore>,
     total_connections_accepted: AtomicU64,
     total_connections_rejected: AtomicU64,
     buffer_pool: Arc<BufferPool>,
@@ -199,7 +210,9 @@ impl ConnectionPool {
 
         Self {
             connections: DashMap::new(),
+            permits: DashMap::new(),
             max_connections,
+            semaphore: Arc::new(Semaphore::new(max_connections)),
             total_connections_accepted: AtomicU64::new(0),
             total_connections_rejected: AtomicU64::new(0),
             buffer_pool,
@@ -221,26 +234,42 @@ impl ConnectionPool {
         self.buffer_pool.stats().await
     }
 
-    /// Check if a new connection can be accepted
-    pub async fn can_accept_connection(&self) -> bool {
-        self.connections.len() < self.max_connections
+    /// Try to atomically reserve a slot for a new connection. Returns the
+    /// permit on success; the caller must hand the permit to
+    /// `add_connection` or drop it (which returns the slot).
+    ///
+    /// Replaces the previous TOCTOU `can_accept_connection() then add`
+    /// pattern, which under concurrent accepts could let
+    /// `max_connections + N` connections through.
+    pub fn try_reserve_slot(&self) -> Option<OwnedSemaphorePermit> {
+        match Arc::clone(&self.semaphore).try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                self.total_connections_rejected
+                    .fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
     }
 
-    /// Add a new connection to the pool
-    pub async fn add_connection(&self, connection: ClientConnection) -> Result<()> {
-        if !self.can_accept_connection().await {
-            self.total_connections_rejected
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(RustyPotatoError::NetworkError {
-                message: "Connection pool is full".to_string(),
-                source: None,
-                connection_id: None,
-            });
-        }
+    /// Backwards-compatible peek at remaining capacity. Prefer
+    /// `try_reserve_slot` for any decision-making — this method races
+    /// against concurrent accepts.
+    pub async fn can_accept_connection(&self) -> bool {
+        self.semaphore.available_permits() > 0
+    }
 
+    /// Add a new connection to the pool. Caller must have already
+    /// reserved a permit via `try_reserve_slot`.
+    pub async fn add_connection(
+        &self,
+        connection: ClientConnection,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<()> {
         let client_id = connection.client_id;
         self.connections
             .insert(client_id, Arc::new(tokio::sync::Mutex::new(connection)));
+        self.permits.insert(client_id, permit);
         self.total_connections_accepted
             .fetch_add(1, Ordering::Relaxed);
 
@@ -252,8 +281,10 @@ impl ConnectionPool {
         Ok(())
     }
 
-    /// Remove a connection from the pool
+    /// Remove a connection from the pool. Drops the associated semaphore
+    /// permit, releasing the slot.
     pub async fn remove_connection(&self, client_id: Uuid) -> Result<()> {
+        let _permit = self.permits.remove(&client_id);
         match self.connections.remove(&client_id) {
             Some(_) => {
                 debug!(
@@ -347,10 +378,35 @@ impl ConnectionPool {
         idle_connections
     }
 
-    /// Close all connections (used during shutdown)
+    /// Close idle connections that haven't seen activity for at least
+    /// `idle_threshold`. Best-effort shuts down the socket so the
+    /// connection handler observes EOF and exits, then removes the
+    /// connection from the pool (which releases the semaphore permit).
+    /// Returns the number of connections evicted.
+    pub async fn evict_idle(&self, idle_threshold: std::time::Duration) -> usize {
+        let idle_ids = self.find_idle_connections(idle_threshold).await;
+        let mut evicted = 0usize;
+        for client_id in idle_ids {
+            if let Some(entry) = self.connections.get(&client_id) {
+                let mut conn = entry.value().lock().await;
+                let _ = conn.stream.shutdown().await;
+            }
+            if self.remove_connection(client_id).await.is_ok() {
+                evicted += 1;
+            }
+        }
+        if evicted > 0 {
+            debug!("Evicted {evicted} idle connections");
+        }
+        evicted
+    }
+
+    /// Close all connections (used during shutdown). Drops the associated
+    /// permits so the semaphore returns to its initial capacity.
     pub async fn close_all_connections(&self) -> usize {
         let count = self.connections.len();
         self.connections.clear();
+        self.permits.clear();
         debug!("Closed {} connections during shutdown", count);
         count
     }
@@ -468,8 +524,9 @@ mod tests {
         let (connection, _) = create_test_connection().await;
         let client_id = connection.client_id;
 
-        // Add connection
-        let result = pool.add_connection(connection).await;
+        // Reserve and add connection
+        let permit = pool.try_reserve_slot().expect("permit should be available");
+        let result = pool.add_connection(connection, permit).await;
         assert!(result.is_ok());
         assert_eq!(pool.active_connections().await, 1);
         assert_eq!(pool.total_connections_accepted().await, 1);
@@ -486,19 +543,20 @@ mod tests {
 
         // Add first connection
         let (connection1, _) = create_test_connection().await;
-        assert!(pool.add_connection(connection1).await.is_ok());
+        let p1 = pool.try_reserve_slot().unwrap();
+        assert!(pool.add_connection(connection1, p1).await.is_ok());
         assert!(pool.can_accept_connection().await);
 
         // Add second connection
         let (connection2, _) = create_test_connection().await;
-        assert!(pool.add_connection(connection2).await.is_ok());
+        let p2 = pool.try_reserve_slot().unwrap();
+        assert!(pool.add_connection(connection2, p2).await.is_ok());
         assert!(!pool.can_accept_connection().await);
         assert!(pool.is_full().await);
 
-        // Try to add third connection (should fail)
-        let (connection3, _) = create_test_connection().await;
-        let result = pool.add_connection(connection3).await;
-        assert!(result.is_err());
+        // Try to reserve a third slot — should be denied. The semaphore
+        // is the source of truth; rejection is recorded on try_reserve.
+        assert!(pool.try_reserve_slot().is_none());
         assert_eq!(pool.total_connections_rejected().await, 1);
     }
 
@@ -509,7 +567,9 @@ mod tests {
         let client_id = connection.client_id;
 
         // Add connection
-        pool.add_connection(connection).await.unwrap();
+        pool.add_connection(connection, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
 
         // Get connection
         let retrieved = pool.get_connection(client_id).await;
@@ -532,8 +592,12 @@ mod tests {
         let (connection1, _) = create_test_connection().await;
         let (connection2, _) = create_test_connection().await;
 
-        pool.add_connection(connection1).await.unwrap();
-        pool.add_connection(connection2).await.unwrap();
+        pool.add_connection(connection1, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
+        pool.add_connection(connection2, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
 
         let stats = pool.stats().await;
         assert_eq!(stats.active_connections, 2);
@@ -549,9 +613,13 @@ mod tests {
         let (connection1, _) = create_test_connection().await;
         let (connection2, _) = create_test_connection().await;
 
-        pool.add_connection(connection1).await.unwrap();
+        pool.add_connection(connection1, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await; // Ensure different timestamps
-        pool.add_connection(connection2).await.unwrap();
+        pool.add_connection(connection2, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
 
         let connections = pool.list_connections().await;
         assert_eq!(connections.len(), 2);
@@ -566,7 +634,9 @@ mod tests {
         let (connection, _) = create_test_connection().await;
         let client_id = connection.client_id;
 
-        pool.add_connection(connection).await.unwrap();
+        pool.add_connection(connection, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
 
         // Should not be idle immediately
         let idle = pool.find_idle_connections(Duration::from_millis(100)).await;
@@ -585,8 +655,12 @@ mod tests {
         let (connection1, _) = create_test_connection().await;
         let (connection2, _) = create_test_connection().await;
 
-        pool.add_connection(connection1).await.unwrap();
-        pool.add_connection(connection2).await.unwrap();
+        pool.add_connection(connection1, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
+        pool.add_connection(connection2, pool.try_reserve_slot().unwrap())
+            .await
+            .unwrap();
 
         assert_eq!(pool.active_connections().await, 2);
 
