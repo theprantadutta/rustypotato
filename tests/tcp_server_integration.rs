@@ -77,11 +77,11 @@ async fn send_command(
     // Simple approach: read with a reasonable buffer size and timeout
     let mut buffer = vec![0u8; 4096]; // Larger buffer for large responses
     let n = timeout(Duration::from_secs(30), stream.read(&mut buffer)).await??;
-    
+
     if n == 0 {
         return Err("Connection closed".into());
     }
-    
+
     buffer.truncate(n);
     Ok(buffer)
 }
@@ -131,7 +131,8 @@ async fn test_server_multiple_connections() {
 
     // Create multiple connections
     let mut connections = Vec::new();
-    for i in 0..3 { // Reduce to 3 connections for stability
+    for i in 0..3 {
+        // Reduce to 3 connections for stability
         let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr))
             .await
             .unwrap()
@@ -235,11 +236,14 @@ async fn test_server_error_handling() {
     {
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let unknown_cmd = b"*1\r\n$7\r\nUNKNOWN\r\n";
-        
+
         match send_command(&mut stream, unknown_cmd).await {
             Ok(response) => {
                 let response_str = String::from_utf8_lossy(&response);
-                assert!(response_str.starts_with("-ERR unknown command") || response_str.starts_with("-ERR"));
+                assert!(
+                    response_str.starts_with("-ERR unknown command")
+                        || response_str.starts_with("-ERR")
+                );
             }
             Err(_) => {
                 // Connection might be closed due to error, which is acceptable
@@ -251,11 +255,14 @@ async fn test_server_error_handling() {
     {
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let wrong_arity_cmd = b"*2\r\n$3\r\nSET\r\n$3\r\nkey\r\n"; // SET needs 3 args
-        
+
         match send_command(&mut stream, wrong_arity_cmd).await {
             Ok(response) => {
                 let response_str = String::from_utf8_lossy(&response);
-                assert!(response_str.contains("wrong number of arguments") || response_str.starts_with("-ERR"));
+                assert!(
+                    response_str.contains("wrong number of arguments")
+                        || response_str.starts_with("-ERR")
+                );
             }
             Err(_) => {
                 // Connection might be closed due to error, which is acceptable
@@ -335,7 +342,10 @@ async fn test_server_partial_commands() {
         let response = send_command(&mut stream, &cmd).await.unwrap();
         let response_str = String::from_utf8_lossy(&response);
         // Just verify we get some response (OK for SET, value for GET)
-        assert!(!response.is_empty() && (response_str.contains("OK") || response_str.contains("value1")));
+        assert!(
+            !response.is_empty()
+                && (response_str.contains("OK") || response_str.contains("value1"))
+        );
     }
 
     // Cleanup
@@ -399,15 +409,32 @@ async fn test_server_command_pipelining() {
 
     // Send commands one by one and verify responses (simpler than true pipelining)
     let test_cases = vec![
-        (b"*3\r\n$3\r\nSET\r\n$4\r\nkey1\r\n$6\r\nvalue1\r\n".to_vec(), b"+OK\r\n".to_vec()),
-        (b"*3\r\n$3\r\nSET\r\n$4\r\nkey2\r\n$6\r\nvalue2\r\n".to_vec(), b"+OK\r\n".to_vec()),
-        (b"*2\r\n$3\r\nGET\r\n$4\r\nkey1\r\n".to_vec(), b"$6\r\nvalue1\r\n".to_vec()),
-        (b"*2\r\n$3\r\nGET\r\n$4\r\nkey2\r\n".to_vec(), b"$6\r\nvalue2\r\n".to_vec()),
+        (
+            b"*3\r\n$3\r\nSET\r\n$4\r\nkey1\r\n$6\r\nvalue1\r\n".to_vec(),
+            b"+OK\r\n".to_vec(),
+        ),
+        (
+            b"*3\r\n$3\r\nSET\r\n$4\r\nkey2\r\n$6\r\nvalue2\r\n".to_vec(),
+            b"+OK\r\n".to_vec(),
+        ),
+        (
+            b"*2\r\n$3\r\nGET\r\n$4\r\nkey1\r\n".to_vec(),
+            b"$6\r\nvalue1\r\n".to_vec(),
+        ),
+        (
+            b"*2\r\n$3\r\nGET\r\n$4\r\nkey2\r\n".to_vec(),
+            b"$6\r\nvalue2\r\n".to_vec(),
+        ),
     ];
 
     for (command, expected) in test_cases {
         let response = send_command(&mut stream, &command).await.unwrap();
-        assert_eq!(response, expected, "Command failed: {:?}", String::from_utf8_lossy(&command));
+        assert_eq!(
+            response,
+            expected,
+            "Command failed: {:?}",
+            String::from_utf8_lossy(&command)
+        );
     }
 
     // Cleanup

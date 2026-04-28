@@ -4,12 +4,12 @@
 //! including proper RESP encoding/decoding and concurrent access.
 
 use rustypotato::{Config, RustyPotatoServer};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
-use std::sync::Arc;
 use tokio::sync::Barrier;
+use tokio::time::timeout;
 
 /// Helper function to create and start a test server
 async fn create_and_start_test_server() -> (RustyPotatoServer, std::net::SocketAddr) {
@@ -63,7 +63,10 @@ async fn test_hset_hget_basic() {
     // HGET myhash field1
     let cmd = build_resp_command(&["HGET", "myhash", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b"$6\r\nvalue1\r\n", "HGET should return the value");
+    assert_eq!(
+        response, b"$6\r\nvalue1\r\n",
+        "HGET should return the value"
+    );
 }
 
 #[tokio::test]
@@ -95,7 +98,10 @@ async fn test_hget_nonexistent() {
     // HGET nonexistent field
     let cmd = build_resp_command(&["HGET", "nonexistent", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b"$-1\r\n", "HGET should return nil for nonexistent key");
+    assert_eq!(
+        response, b"$-1\r\n",
+        "HGET should return nil for nonexistent key"
+    );
 
     // HSET then HGET nonexistent field
     let cmd = build_resp_command(&["HSET", "myhash", "field1", "value1"]);
@@ -103,7 +109,10 @@ async fn test_hget_nonexistent() {
 
     let cmd = build_resp_command(&["HGET", "myhash", "nonexistent"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b"$-1\r\n", "HGET should return nil for nonexistent field");
+    assert_eq!(
+        response, b"$-1\r\n",
+        "HGET should return nil for nonexistent field"
+    );
 }
 
 // ==================== HDEL Tests ====================
@@ -142,14 +151,22 @@ async fn test_hdel_multiple_fields() {
 
     // Setup: HSET three fields
     for i in 1..=3 {
-        let cmd = build_resp_command(&["HSET", "myhash", &format!("field{}", i), &format!("value{}", i)]);
+        let cmd = build_resp_command(&[
+            "HSET",
+            "myhash",
+            &format!("field{}", i),
+            &format!("value{}", i),
+        ]);
         send_command(&mut stream, &cmd).await.unwrap();
     }
 
     // HDEL two fields + one nonexistent
     let cmd = build_resp_command(&["HDEL", "myhash", "field1", "field2", "nonexistent"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b":2\r\n", "HDEL should return count of deleted fields");
+    assert_eq!(
+        response, b":2\r\n",
+        "HDEL should return count of deleted fields"
+    );
 
     // Verify field3 still exists
     let cmd = build_resp_command(&["HGET", "myhash", "field3"]);
@@ -165,7 +182,10 @@ async fn test_hdel_nonexistent_key() {
     // HDEL on nonexistent key
     let cmd = build_resp_command(&["HDEL", "nonexistent", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b":0\r\n", "HDEL should return 0 for nonexistent key");
+    assert_eq!(
+        response, b":0\r\n",
+        "HDEL should return 0 for nonexistent key"
+    );
 }
 
 // ==================== HGETALL Tests ====================
@@ -187,7 +207,10 @@ async fn test_hgetall_basic() {
 
     // Response should be an array with 4 elements (2 field-value pairs)
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("*4\r\n"), "HGETALL should return array of 4 elements");
+    assert!(
+        response_str.starts_with("*4\r\n"),
+        "HGETALL should return array of 4 elements"
+    );
 
     // Should contain both fields and values (order may vary)
     assert!(response_str.contains("name") || response_str.contains("age"));
@@ -211,7 +234,12 @@ async fn test_hgetall_large_hash() {
 
     // Setup: HSET 50 fields
     for i in 1..=50 {
-        let cmd = build_resp_command(&["HSET", "largehash", &format!("field{}", i), &format!("value{}", i)]);
+        let cmd = build_resp_command(&[
+            "HSET",
+            "largehash",
+            &format!("field{}", i),
+            &format!("value{}", i),
+        ]);
         send_command(&mut stream, &cmd).await.unwrap();
     }
 
@@ -221,7 +249,10 @@ async fn test_hgetall_large_hash() {
 
     // Response should be an array with 100 elements (50 field-value pairs)
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("*100\r\n"), "HGETALL should return array of 100 elements for 50 fields");
+    assert!(
+        response_str.starts_with("*100\r\n"),
+        "HGETALL should return array of 100 elements for 50 fields"
+    );
 }
 
 // ==================== HEXISTS Tests ====================
@@ -234,7 +265,10 @@ async fn test_hexists_basic() {
     // HEXISTS on nonexistent key
     let cmd = build_resp_command(&["HEXISTS", "myhash", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b":0\r\n", "HEXISTS should return 0 for nonexistent key");
+    assert_eq!(
+        response, b":0\r\n",
+        "HEXISTS should return 0 for nonexistent key"
+    );
 
     // HSET then HEXISTS
     let cmd = build_resp_command(&["HSET", "myhash", "field1", "value1"]);
@@ -242,12 +276,18 @@ async fn test_hexists_basic() {
 
     let cmd = build_resp_command(&["HEXISTS", "myhash", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b":1\r\n", "HEXISTS should return 1 for existing field");
+    assert_eq!(
+        response, b":1\r\n",
+        "HEXISTS should return 1 for existing field"
+    );
 
     // HEXISTS on nonexistent field
     let cmd = build_resp_command(&["HEXISTS", "myhash", "nonexistent"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
-    assert_eq!(response, b":0\r\n", "HEXISTS should return 0 for nonexistent field");
+    assert_eq!(
+        response, b":0\r\n",
+        "HEXISTS should return 0 for nonexistent field"
+    );
 }
 
 // ==================== Error Handling Tests ====================
@@ -261,19 +301,28 @@ async fn test_hash_wrong_arg_count() {
     let cmd = build_resp_command(&["HSET", "myhash", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("-ERR"), "HSET with wrong args should return error");
+    assert!(
+        response_str.starts_with("-ERR"),
+        "HSET with wrong args should return error"
+    );
 
     // HGET with too few args
     let cmd = build_resp_command(&["HGET", "myhash"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("-ERR"), "HGET with wrong args should return error");
+    assert!(
+        response_str.starts_with("-ERR"),
+        "HGET with wrong args should return error"
+    );
 
     // HDEL with too few args
     let cmd = build_resp_command(&["HDEL", "myhash"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("-ERR"), "HDEL with wrong args should return error");
+    assert!(
+        response_str.starts_with("-ERR"),
+        "HDEL with wrong args should return error"
+    );
 }
 
 #[tokio::test]
@@ -289,13 +338,19 @@ async fn test_hash_type_mismatch() {
     let cmd = build_resp_command(&["HSET", "stringkey", "field1", "value1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("-"), "HSET on string key should return error");
+    assert!(
+        response_str.starts_with("-"),
+        "HSET on string key should return error"
+    );
 
     // Try HGET on string key (type mismatch)
     let cmd = build_resp_command(&["HGET", "stringkey", "field1"]);
     let response = send_command(&mut stream, &cmd).await.unwrap();
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("-"), "HGET on string key should return error");
+    assert!(
+        response_str.starts_with("-"),
+        "HGET on string key should return error"
+    );
 }
 
 // ==================== Hash with TTL Tests ====================
@@ -342,7 +397,12 @@ async fn test_concurrent_hash_operations() {
             let mut stream = TcpStream::connect(addr).await.unwrap();
             barrier.wait().await;
 
-            let cmd = build_resp_command(&["HSET", "concurrent_hash", &format!("field{}", i), &format!("value{}", i)]);
+            let cmd = build_resp_command(&[
+                "HSET",
+                "concurrent_hash",
+                &format!("field{}", i),
+                &format!("value{}", i),
+            ]);
             let response = send_command(&mut stream, &cmd).await.unwrap();
 
             // Should return 1 (new field)
@@ -360,7 +420,10 @@ async fn test_concurrent_hash_operations() {
     let response = send_command(&mut stream, &cmd).await.unwrap();
 
     let response_str = String::from_utf8_lossy(&response);
-    assert!(response_str.starts_with("*40\r\n"), "Should have 40 elements (20 fields * 2)");
+    assert!(
+        response_str.starts_with("*40\r\n"),
+        "Should have 40 elements (20 fields * 2)"
+    );
 }
 
 #[tokio::test]
@@ -407,7 +470,10 @@ async fn test_hash_operations_workflow() {
     let response_str = String::from_utf8_lossy(&response);
 
     // Should have 4 elements (2 field-value pairs: name and age)
-    assert!(response_str.starts_with("*4\r\n"), "Should have 4 elements after deleting email");
+    assert!(
+        response_str.starts_with("*4\r\n"),
+        "Should have 4 elements after deleting email"
+    );
     assert!(!response_str.contains("email"), "Email should be deleted");
 }
 

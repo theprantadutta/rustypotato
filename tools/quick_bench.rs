@@ -31,7 +31,10 @@ fn main() {
         print!("Warming up...");
         for i in 0..WARMUP_ITERATIONS {
             let key = format!("warmup_key_{}", i);
-            store.set(key.clone(), format!("value_{}", i)).await.unwrap();
+            store
+                .set(key.clone(), format!("value_{}", i))
+                .await
+                .unwrap();
             let _ = store.get(&key);
         }
         println!(" done");
@@ -61,10 +64,22 @@ fn main() {
         println!("═══════════════════════════════════════════════════════════════");
         println!();
         println!("THROUGHPUT:");
-        println!("  SET operations:    {:>12} ops/sec", format_number(set_stats.ops_per_sec));
-        println!("  GET operations:    {:>12} ops/sec", format_number(get_stats.ops_per_sec));
-        println!("  INCR operations:   {:>12} ops/sec", format_number(incr_stats.ops_per_sec));
-        println!("  DELETE operations: {:>12} ops/sec", format_number(del_stats.ops_per_sec));
+        println!(
+            "  SET operations:    {:>12} ops/sec",
+            format_number(set_stats.ops_per_sec)
+        );
+        println!(
+            "  GET operations:    {:>12} ops/sec",
+            format_number(get_stats.ops_per_sec)
+        );
+        println!(
+            "  INCR operations:   {:>12} ops/sec",
+            format_number(incr_stats.ops_per_sec)
+        );
+        println!(
+            "  DELETE operations: {:>12} ops/sec",
+            format_number(del_stats.ops_per_sec)
+        );
         println!();
         println!("LATENCY (SET):");
         println!("  Average:  {:>10}", format_duration(set_stats.avg));
@@ -123,7 +138,10 @@ async fn benchmark_incr(store: &Arc<MemoryStore>, iterations: usize) -> Vec<Dura
     let mut latencies = Vec::with_capacity(iterations);
 
     // Pre-create a counter
-    store.set("incr_counter".to_string(), "0".to_string()).await.unwrap();
+    store
+        .set("incr_counter".to_string(), "0".to_string())
+        .await
+        .unwrap();
 
     for _ in 0..iterations {
         let start = Instant::now();

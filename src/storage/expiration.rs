@@ -96,7 +96,11 @@ impl ExpirationManager {
     /// Shutdown the expiration manager
     pub async fn shutdown(&mut self) -> Result<()> {
         // Send shutdown command
-        if self.command_sender.send(ExpirationCommand::Shutdown).is_err() {
+        if self
+            .command_sender
+            .send(ExpirationCommand::Shutdown)
+            .is_err()
+        {
             warn!("Failed to send shutdown command to expiration manager");
         }
 

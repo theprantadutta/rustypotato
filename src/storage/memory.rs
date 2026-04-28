@@ -36,11 +36,11 @@ impl ValueType {
             ValueType::String(s) => s
                 .parse::<i64>()
                 .map_err(|_| RustyPotatoError::NotAnInteger { value: s.clone() }),
-            ValueType::Hash(_) => Err(RustyPotatoError::NotAnInteger { 
-                value: "hash".to_string() 
+            ValueType::Hash(_) => Err(RustyPotatoError::NotAnInteger {
+                value: "hash".to_string(),
             }),
-            ValueType::List(_) => Err(RustyPotatoError::NotAnInteger { 
-                value: "list".to_string() 
+            ValueType::List(_) => Err(RustyPotatoError::NotAnInteger {
+                value: "list".to_string(),
             }),
         }
     }
@@ -208,17 +208,13 @@ impl ValueMetadata {
             ValueType::String(s) => (s.len(), 1),
             ValueType::Integer(_) => (8, 1), // i64 is 8 bytes
             ValueType::Hash(h) => {
-                let size = h.iter()
-                    .map(|(k, v)| k.len() + v.len())
-                    .sum::<usize>();
+                let size = h.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
                 (size, h.len())
-            },
+            }
             ValueType::List(l) => {
-                let size = l.iter()
-                    .map(|s| s.len())
-                    .sum::<usize>();
+                let size = l.iter().map(|s| s.len()).sum::<usize>();
                 (size, l.len())
-            },
+            }
         };
 
         Self {
@@ -235,17 +231,13 @@ impl ValueMetadata {
             ValueType::String(s) => (s.len(), 1),
             ValueType::Integer(_) => (8, 1),
             ValueType::Hash(h) => {
-                let size = h.iter()
-                    .map(|(k, v)| k.len() + v.len())
-                    .sum::<usize>();
+                let size = h.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
                 (size, h.len())
-            },
+            }
             ValueType::List(l) => {
-                let size = l.iter()
-                    .map(|s| s.len())
-                    .sum::<usize>();
+                let size = l.iter().map(|s| s.len()).sum::<usize>();
                 (size, l.len())
-            },
+            }
         };
 
         self.size_bytes = size_bytes;
@@ -764,7 +756,7 @@ impl MemoryStore {
                 match &entry.get().value {
                     ValueType::Hash(existing_hash) => {
                         let is_new = !existing_hash.contains_key(&field_string);
-                        
+
                         // Clone the existing stored value and update it
                         let mut stored_value = entry.get().clone();
                         if let Ok(hash) = stored_value.value.as_hash_mut() {
@@ -772,14 +764,16 @@ impl MemoryStore {
                             stored_value.touch();
                             stored_value.update_metadata();
                         }
-                        
+
                         // Replace the entry
                         entry.insert(stored_value);
                         is_new
                     }
                     _ => {
                         return Err(RustyPotatoError::StorageError {
-                            message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                            message:
+                                "WRONGTYPE Operation against a key holding the wrong kind of value"
+                                    .to_string(),
                             operation: Some("hset".to_string()),
                             source: None,
                         });
@@ -831,7 +825,8 @@ impl MemoryStore {
             match entry.value.as_hash() {
                 Ok(hash) => Ok(hash.get(field_str).cloned()),
                 Err(_) => Err(RustyPotatoError::StorageError {
-                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value"
+                        .to_string(),
                     operation: Some("hget".to_string()),
                     source: None,
                 }),
@@ -869,7 +864,9 @@ impl MemoryStore {
                 }
                 _ => {
                     return Err(RustyPotatoError::StorageError {
-                        message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                        message:
+                            "WRONGTYPE Operation against a key holding the wrong kind of value"
+                                .to_string(),
                         operation: Some("hdel".to_string()),
                         source: None,
                     });
@@ -900,7 +897,9 @@ impl MemoryStore {
                 if should_remove_key {
                     persistence.log_delete(key_str.to_string()).await?;
                 } else if let Some(entry) = self.data.get(key_str) {
-                    persistence.log_set(key_str.to_string(), entry.value.clone()).await?;
+                    persistence
+                        .log_set(key_str.to_string(), entry.value.clone())
+                        .await?;
                 }
             }
         }
@@ -935,7 +934,8 @@ impl MemoryStore {
                     Ok(result)
                 }
                 Err(_) => Err(RustyPotatoError::StorageError {
-                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value"
+                        .to_string(),
                     operation: Some("hgetall".to_string()),
                     source: None,
                 }),
@@ -968,7 +968,8 @@ impl MemoryStore {
             match entry.value.as_hash() {
                 Ok(hash) => Ok(hash.contains_key(field_str)),
                 Err(_) => Err(RustyPotatoError::StorageError {
-                    message: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    message: "WRONGTYPE Operation against a key holding the wrong kind of value"
+                        .to_string(),
                     operation: Some("hexists".to_string()),
                     source: None,
                 }),
@@ -1231,7 +1232,7 @@ mod tests {
         store.hset("myhash", "field2", "value3").await.unwrap();
         let all_fields = store.hgetall("myhash").await.unwrap();
         assert_eq!(all_fields.len(), 2);
-        
+
         let mut field_map = std::collections::HashMap::new();
         for (field, value) in all_fields {
             field_map.insert(field, value);
@@ -1286,11 +1287,18 @@ mod tests {
         // Create hash with expiration
         store.hset("myhash", "field1", "value1").await.unwrap();
         let expires_at = std::time::Instant::now() + std::time::Duration::from_millis(1);
-        store.set_with_expiration("myhash", ValueType::Hash({
-            let mut hash = HashMap::new();
-            hash.insert("field1".to_string(), "value1".to_string());
-            hash
-        }), expires_at).await.unwrap();
+        store
+            .set_with_expiration(
+                "myhash",
+                ValueType::Hash({
+                    let mut hash = HashMap::new();
+                    hash.insert("field1".to_string(), "value1".to_string());
+                    hash
+                }),
+                expires_at,
+            )
+            .await
+            .unwrap();
 
         // Wait for expiration
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

@@ -71,8 +71,13 @@ async fn test_connection_drop_mid_command() {
 
     // Server should still accept new connections and process commands
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let response = send_and_receive(&mut stream, &["SET", "test_key", "test_value"]).await.unwrap();
-    assert_eq!(response, b"+OK\r\n", "Server should process SET after client drop");
+    let response = send_and_receive(&mut stream, &["SET", "test_key", "test_value"])
+        .await
+        .unwrap();
+    assert_eq!(
+        response, b"+OK\r\n",
+        "Server should process SET after client drop"
+    );
 }
 
 /// Test: Server handles connection drop after complete command
@@ -92,7 +97,9 @@ async fn test_connection_drop_after_command() {
 
     // Verify the command was processed
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let response = send_and_receive(&mut stream, &["GET", "dropkey"]).await.unwrap();
+    let response = send_and_receive(&mut stream, &["GET", "dropkey"])
+        .await
+        .unwrap();
 
     // The SET command may or may not have completed depending on timing
     // This test verifies the server survives either way
@@ -176,7 +183,9 @@ async fn test_rapid_connect_disconnect() {
 
     // Server should still work
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let response = send_and_receive(&mut stream, &["SET", "after_rapid", "value"]).await.unwrap();
+    let response = send_and_receive(&mut stream, &["SET", "after_rapid", "value"])
+        .await
+        .unwrap();
     assert_eq!(response, b"+OK\r\n");
 }
 
@@ -229,7 +238,9 @@ async fn test_client_stops_reading() {
 
     // Server should still work for other clients
     let mut stream2 = TcpStream::connect(addr).await.unwrap();
-    let response = send_and_receive(&mut stream2, &["SET", "other_key", "other_value"]).await.unwrap();
+    let response = send_and_receive(&mut stream2, &["SET", "other_key", "other_value"])
+        .await
+        .unwrap();
     assert_eq!(response, b"+OK\r\n");
 }
 
@@ -251,7 +262,9 @@ async fn test_pipelined_with_interleaved_drops() {
     // Second connection: verify and update
     {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        let response = send_and_receive(&mut stream, &["GET", "persist"]).await.unwrap();
+        let response = send_and_receive(&mut stream, &["GET", "persist"])
+            .await
+            .unwrap();
 
         // Value should persist across connections
         assert_eq!(response, b"$6\r\nvalue1\r\n");
@@ -267,7 +280,10 @@ async fn test_garbage_data() {
     let mut stream = TcpStream::connect(addr).await.unwrap();
 
     // Send complete garbage
-    stream.write_all(b"not valid resp at all\x00\xff\xfe").await.unwrap();
+    stream
+        .write_all(b"not valid resp at all\x00\xff\xfe")
+        .await
+        .unwrap();
     stream.flush().await.unwrap();
 
     // Server should either error or ignore, but not crash
@@ -275,7 +291,9 @@ async fn test_garbage_data() {
 
     // New connection should still work
     let mut stream2 = TcpStream::connect(addr).await.unwrap();
-    let response = send_and_receive(&mut stream2, &["SET", "after_garbage", "value"]).await.unwrap();
+    let response = send_and_receive(&mut stream2, &["SET", "after_garbage", "value"])
+        .await
+        .unwrap();
     assert_eq!(response, b"+OK\r\n");
 }
 
@@ -285,11 +303,11 @@ async fn test_malformed_resp() {
     let (_server, addr) = create_test_server().await;
 
     let malformed_cases = vec![
-        b"*-5\r\n".to_vec(),              // Negative array length
-        b"$100\r\nshort\r\n".to_vec(),    // Length mismatch
-        b"*1\r\n$3\r\nGET".to_vec(),      // Missing CRLF
-        b":notanumber\r\n".to_vec(),      // Invalid integer
-        b"+OK".to_vec(),                   // Missing CRLF
+        b"*-5\r\n".to_vec(),           // Negative array length
+        b"$100\r\nshort\r\n".to_vec(), // Length mismatch
+        b"*1\r\n$3\r\nGET".to_vec(),   // Missing CRLF
+        b":notanumber\r\n".to_vec(),   // Invalid integer
+        b"+OK".to_vec(),               // Missing CRLF
     ];
 
     for malformed in malformed_cases {
@@ -301,7 +319,9 @@ async fn test_malformed_resp() {
 
     // Server should still be operational
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let response = send_and_receive(&mut stream, &["SET", "after_malformed", "value"]).await.unwrap();
+    let response = send_and_receive(&mut stream, &["SET", "after_malformed", "value"])
+        .await
+        .unwrap();
     assert_eq!(response, b"+OK\r\n");
 }
 
@@ -316,7 +336,9 @@ async fn test_many_sequential_commands() {
     for i in 0..100 {
         let key = format!("seq_key_{}", i);
         let value = format!("seq_value_{}", i);
-        let response = send_and_receive(&mut stream, &["SET", &key, &value]).await.unwrap();
+        let response = send_and_receive(&mut stream, &["SET", &key, &value])
+            .await
+            .unwrap();
         assert_eq!(response, b"+OK\r\n", "Command {} should succeed", i);
     }
 
@@ -326,6 +348,11 @@ async fn test_many_sequential_commands() {
         let expected_value = format!("seq_value_{}", i);
         let response = send_and_receive(&mut stream, &["GET", &key]).await.unwrap();
         let expected = format!("${}\r\n{}\r\n", expected_value.len(), expected_value);
-        assert_eq!(response, expected.as_bytes(), "Key {} should have correct value", i);
+        assert_eq!(
+            response,
+            expected.as_bytes(),
+            "Key {} should have correct value",
+            i
+        );
     }
 }

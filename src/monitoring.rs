@@ -246,9 +246,8 @@ impl MonitoringServer {
                 )
             }
             Err(e) => {
-                let response_body = format!(
-                    r#"{{"status": "error", "message": "Log rotation failed: {e}"}}"#
-                );
+                let response_body =
+                    format!(r#"{{"status": "error", "message": "Log rotation failed: {e}"}}"#);
                 format!(
                     "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                     response_body.len(),

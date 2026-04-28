@@ -40,9 +40,7 @@ async fn test_recovery_completely_corrupted_file() {
     file.write_all(b"garbage not valid aof format\n")
         .await
         .unwrap();
-    file.write_all(b"also invalid line here\n")
-        .await
-        .unwrap();
+    file.write_all(b"also invalid line here\n").await.unwrap();
     file.sync_all().await.unwrap();
 
     // Recovery should not panic, should skip invalid lines
@@ -200,7 +198,10 @@ async fn test_recovery_whitespace_only() {
     let recovery_handler = RecoveryHandler::new(aof_path);
     let entries = recovery_handler.recover().await.unwrap();
 
-    assert!(entries.is_empty(), "Whitespace-only file should return no entries");
+    assert!(
+        entries.is_empty(),
+        "Whitespace-only file should return no entries"
+    );
 }
 
 // ==================== Write Failure Tests ====================

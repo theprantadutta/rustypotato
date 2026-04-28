@@ -8,11 +8,9 @@
 
 use proptest::prelude::*;
 use rustypotato::commands::{
-    Command, CommandResult, ResponseValue,
-    SetCommand, GetCommand, DelCommand, ExistsCommand,
-    IncrCommand, DecrCommand,
-    ExpireCommand, TtlCommand,
-    HsetCommand, HgetCommand, HdelCommand, HgetallCommand, HexistsCommand,
+    Command, CommandResult, DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand,
+    HdelCommand, HexistsCommand, HgetCommand, HgetallCommand, HsetCommand, IncrCommand,
+    ResponseValue, SetCommand, TtlCommand,
 };
 use rustypotato::MemoryStore;
 use std::sync::Arc;
@@ -571,9 +569,14 @@ mod concurrent_command_tests {
                 barrier.wait().await;
                 let cmd = HsetCommand;
                 cmd.execute(
-                    &["hash".to_string(), format!("field_{}", i), format!("value_{}", i)],
-                    &store
-                ).await
+                    &[
+                        "hash".to_string(),
+                        format!("field_{}", i),
+                        format!("value_{}", i),
+                    ],
+                    &store,
+                )
+                .await
             }));
         }
 

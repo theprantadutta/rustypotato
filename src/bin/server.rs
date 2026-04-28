@@ -54,11 +54,13 @@ impl ShutdownCoordinator {
         }
 
         // Start monitoring server
-        let monitoring_handle = self.monitoring_server.take().map(|monitoring_server| tokio::spawn(async move {
+        let monitoring_handle = self.monitoring_server.take().map(|monitoring_server| {
+            tokio::spawn(async move {
                 if let Err(e) = monitoring_server.start().await {
                     error!("Monitoring server error: {}", e);
                 }
-            }));
+            })
+        });
 
         // Start the main server
         let mut server = self.server.take().unwrap();
@@ -364,9 +366,19 @@ fn display_version() {
     println!("Build Information:");
     println!("  Version: {}", env!("CARGO_PKG_VERSION"));
     println!("  Target: {}", std::env::consts::ARCH);
-    println!("  Profile: {}", if cfg!(debug_assertions) { "debug" } else { "release" });
+    println!(
+        "  Profile: {}",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
     println!();
-    println!("For more information, visit: {}", env!("CARGO_PKG_REPOSITORY"));
+    println!(
+        "For more information, visit: {}",
+        env!("CARGO_PKG_REPOSITORY")
+    );
 }
 
 /// Display startup banner and system information
@@ -435,7 +447,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load configuration from file or default
     let config = if let Some(config_file) = &args.config_file {
         Config::load_from_file(Some(config_file)).map_err(|e| {
-            eprintln!("Failed to load configuration from {}: {}", config_file.display(), e);
+            eprintln!(
+                "Failed to load configuration from {}: {}",
+                config_file.display(),
+                e
+            );
             e
         })?
     } else {

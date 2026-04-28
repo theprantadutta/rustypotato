@@ -33,8 +33,8 @@ pub use network::TcpServer;
 pub use storage::{MemoryStore, StoredValue, ValueType};
 
 use commands::{
-    DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand, HgetCommand,
-    HgetallCommand, HexistsCommand, HsetCommand, IncrCommand, SetCommand, TtlCommand,
+    DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand, HexistsCommand,
+    HgetCommand, HgetallCommand, HsetCommand, IncrCommand, SetCommand, TtlCommand,
 };
 use std::sync::Arc;
 

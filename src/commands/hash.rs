@@ -193,7 +193,11 @@ mod tests {
     async fn test_hset_command_new_field() {
         let store = create_test_store();
         let cmd = HsetCommand;
-        let args = vec!["myhash".to_string(), "field1".to_string(), "value1".to_string()];
+        let args = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "value1".to_string(),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -215,12 +219,23 @@ mod tests {
         let cmd = HsetCommand;
 
         // Set initial value
-        let args1 = vec!["myhash".to_string(), "field1".to_string(), "value1".to_string()];
+        let args1 = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "value1".to_string(),
+        ];
         let result1 = cmd.execute(&args1, &store).await;
-        assert!(matches!(result1, CommandResult::Ok(ResponseValue::Integer(1))));
+        assert!(matches!(
+            result1,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        ));
 
         // Update the same field
-        let args2 = vec!["myhash".to_string(), "field1".to_string(), "value2".to_string()];
+        let args2 = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "value2".to_string(),
+        ];
         let result2 = cmd.execute(&args2, &store).await;
 
         match result2 {
@@ -246,7 +261,12 @@ mod tests {
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
-        let args = vec!["myhash".to_string(), "field1".to_string(), "value1".to_string(), "extra".to_string()];
+        let args = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "value1".to_string(),
+            "extra".to_string(),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -262,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn test_hget_command_existing_field() {
         let store = create_test_store();
-        
+
         // Set up test data
         store.hset("myhash", "field1", "value1").await.unwrap();
 
@@ -282,7 +302,7 @@ mod tests {
     #[tokio::test]
     async fn test_hget_command_nonexistent_field() {
         let store = create_test_store();
-        
+
         // Set up test data with different field
         store.hset("myhash", "field1", "value1").await.unwrap();
 
@@ -326,7 +346,11 @@ mod tests {
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
-        let args = vec!["myhash".to_string(), "field1".to_string(), "extra".to_string()];
+        let args = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "extra".to_string(),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -342,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn test_hdel_command_single_field() {
         let store = create_test_store();
-        
+
         // Set up test data
         store.hset("myhash", "field1", "value1").await.unwrap();
         store.hset("myhash", "field2", "value2").await.unwrap();
@@ -371,14 +395,19 @@ mod tests {
     #[tokio::test]
     async fn test_hdel_command_multiple_fields() {
         let store = create_test_store();
-        
+
         // Set up test data
         store.hset("myhash", "field1", "value1").await.unwrap();
         store.hset("myhash", "field2", "value2").await.unwrap();
         store.hset("myhash", "field3", "value3").await.unwrap();
 
         let cmd = HdelCommand;
-        let args = vec!["myhash".to_string(), "field1".to_string(), "field2".to_string(), "nonexistent".to_string()];
+        let args = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "field2".to_string(),
+            "nonexistent".to_string(),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -392,9 +421,12 @@ mod tests {
         // Verify fields were deleted
         assert_eq!(store.hget("myhash", "field1").await.unwrap(), None);
         assert_eq!(store.hget("myhash", "field2").await.unwrap(), None);
-        
+
         // Verify field3 still exists
-        assert_eq!(store.hget("myhash", "field3").await.unwrap(), Some("value3".to_string()));
+        assert_eq!(
+            store.hget("myhash", "field3").await.unwrap(),
+            Some("value3".to_string())
+        );
     }
 
     #[tokio::test]
@@ -435,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn test_hgetall_command_with_fields() {
         let store = create_test_store();
-        
+
         // Set up test data
         store.hset("myhash", "field1", "value1").await.unwrap();
         store.hset("myhash", "field2", "value2").await.unwrap();
@@ -448,15 +480,19 @@ mod tests {
         match result {
             CommandResult::Ok(ResponseValue::Array(values)) => {
                 assert_eq!(values.len(), 4); // 2 fields * 2 (field + value)
-                
+
                 // Convert to HashMap for easier testing (order might vary)
                 let mut fields = HashMap::new();
                 for chunk in values.chunks(2) {
-                    if let (ResponseValue::BulkString(Some(field)), ResponseValue::BulkString(Some(value))) = (&chunk[0], &chunk[1]) {
+                    if let (
+                        ResponseValue::BulkString(Some(field)),
+                        ResponseValue::BulkString(Some(value)),
+                    ) = (&chunk[0], &chunk[1])
+                    {
                         fields.insert(field.clone(), value.clone());
                     }
                 }
-                
+
                 assert_eq!(fields.get("field1"), Some(&"value1".to_string()));
                 assert_eq!(fields.get("field2"), Some(&"value2".to_string()));
             }
@@ -467,7 +503,7 @@ mod tests {
     #[tokio::test]
     async fn test_hgetall_command_empty_hash() {
         let store = create_test_store();
-        
+
         // Create empty hash
         store.hset("myhash", "field1", "value1").await.unwrap();
         store.hdel("myhash", "field1").await.unwrap();
@@ -528,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn test_hexists_command_existing_field() {
         let store = create_test_store();
-        
+
         // Set up test data
         store.hset("myhash", "field1", "value1").await.unwrap();
 
@@ -548,7 +584,7 @@ mod tests {
     #[tokio::test]
     async fn test_hexists_command_nonexistent_field() {
         let store = create_test_store();
-        
+
         // Set up test data with different field
         store.hset("myhash", "field1", "value1").await.unwrap();
 
@@ -592,7 +628,11 @@ mod tests {
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
-        let args = vec!["myhash".to_string(), "field1".to_string(), "extra".to_string()];
+        let args = vec![
+            "myhash".to_string(),
+            "field1".to_string(),
+            "extra".to_string(),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -617,22 +657,52 @@ mod tests {
         let hdel_cmd = HdelCommand;
 
         // Set multiple fields
-        let result = hset_cmd.execute(&["myhash".to_string(), "name".to_string(), "John".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
+        let result = hset_cmd
+            .execute(
+                &["myhash".to_string(), "name".to_string(), "John".to_string()],
+                &store,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        ));
 
-        let result = hset_cmd.execute(&["myhash".to_string(), "age".to_string(), "30".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
+        let result = hset_cmd
+            .execute(
+                &["myhash".to_string(), "age".to_string(), "30".to_string()],
+                &store,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        ));
 
         // Get individual fields
-        let result = hget_cmd.execute(&["myhash".to_string(), "name".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "John"));
+        let result = hget_cmd
+            .execute(&["myhash".to_string(), "name".to_string()], &store)
+            .await;
+        assert!(
+            matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "John")
+        );
 
         // Check field existence
-        let result = hexists_cmd.execute(&["myhash".to_string(), "name".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
+        let result = hexists_cmd
+            .execute(&["myhash".to_string(), "name".to_string()], &store)
+            .await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        ));
 
-        let result = hexists_cmd.execute(&["myhash".to_string(), "nonexistent".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(0))));
+        let result = hexists_cmd
+            .execute(&["myhash".to_string(), "nonexistent".to_string()], &store)
+            .await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        ));
 
         // Get all fields
         let result = hgetall_cmd.execute(&["myhash".to_string()], &store).await;
@@ -643,16 +713,30 @@ mod tests {
         }
 
         // Delete a field
-        let result = hdel_cmd.execute(&["myhash".to_string(), "age".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
+        let result = hdel_cmd
+            .execute(&["myhash".to_string(), "age".to_string()], &store)
+            .await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        ));
 
         // Verify field was deleted
-        let result = hget_cmd.execute(&["myhash".to_string(), "age".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(None))));
+        let result = hget_cmd
+            .execute(&["myhash".to_string(), "age".to_string()], &store)
+            .await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::BulkString(None))
+        ));
 
         // Verify other field still exists
-        let result = hget_cmd.execute(&["myhash".to_string(), "name".to_string()], &store).await;
-        assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "John"));
+        let result = hget_cmd
+            .execute(&["myhash".to_string(), "name".to_string()], &store)
+            .await;
+        assert!(
+            matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "John")
+        );
     }
 
     #[tokio::test]
@@ -664,11 +748,22 @@ mod tests {
 
         // Try to use hash operations on string key
         let hset_cmd = HsetCommand;
-        let result = hset_cmd.execute(&["mykey".to_string(), "field1".to_string(), "value1".to_string()], &store).await;
+        let result = hset_cmd
+            .execute(
+                &[
+                    "mykey".to_string(),
+                    "field1".to_string(),
+                    "value1".to_string(),
+                ],
+                &store,
+            )
+            .await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         let hget_cmd = HgetCommand;
-        let result = hget_cmd.execute(&["mykey".to_string(), "field1".to_string()], &store).await;
+        let result = hget_cmd
+            .execute(&["mykey".to_string(), "field1".to_string()], &store)
+            .await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
 }

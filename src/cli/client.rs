@@ -412,9 +412,7 @@ impl CliClient {
     }
 
     /// Convert RespValue to ResponseValue
-    fn convert_resp_to_response(
-        resp_value: crate::network::protocol::RespValue,
-    ) -> ResponseValue {
+    fn convert_resp_to_response(resp_value: crate::network::protocol::RespValue) -> ResponseValue {
         match resp_value {
             crate::network::protocol::RespValue::SimpleString(s) => ResponseValue::SimpleString(s),
             crate::network::protocol::RespValue::BulkString(s) => ResponseValue::BulkString(s),

@@ -18,7 +18,8 @@ fn simple_string_strategy() -> impl Strategy<Value = String> {
 
 /// Strategy for generating bulk strings (can contain any bytes)
 fn bulk_string_strategy() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_\\-\\.\\s]{0,500}".prop_filter("no crlf", |s| !s.contains('\r') && !s.contains('\n'))
+    "[a-zA-Z0-9_\\-\\.\\s]{0,500}"
+        .prop_filter("no crlf", |s| !s.contains('\r') && !s.contains('\n'))
 }
 
 /// Strategy for generating ResponseValue::SimpleString
@@ -56,10 +57,7 @@ fn shallow_array_response() -> impl Strategy<Value = ResponseValue> {
 
 /// Strategy for any ResponseValue including shallow arrays
 fn any_response() -> impl Strategy<Value = ResponseValue> {
-    prop_oneof![
-        leaf_response(),
-        shallow_array_response(),
-    ]
+    prop_oneof![leaf_response(), shallow_array_response(),]
 }
 
 proptest! {
@@ -286,8 +284,8 @@ mod decode_tests {
             b"$-2\r\n",
             b"$9999999999999999999\r\n",
             b"*-1\r\n",
-            b"+OK", // missing \r\n
-            b":\r\n", // empty integer
+            b"+OK",            // missing \r\n
+            b":\r\n",          // empty integer
             b"*1\r\n$3\r\nab", // incomplete bulk string
         ];
 
@@ -304,7 +302,10 @@ mod decode_tests {
         let test_cases = vec![
             (b"*1\r\n$4\r\nPING\r\n".to_vec(), Some("PING")),
             (b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n".to_vec(), Some("GET")),
-            (b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n".to_vec(), Some("SET")),
+            (
+                b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n".to_vec(),
+                Some("SET"),
+            ),
         ];
 
         for (data, expected_cmd) in test_cases {

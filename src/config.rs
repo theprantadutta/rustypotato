@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 /// Main configuration structure for RustyPotato server
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -70,7 +69,6 @@ pub enum LogFormat {
     Pretty,
     Compact,
 }
-
 
 impl Default for ServerConfig {
     fn default() -> Self {

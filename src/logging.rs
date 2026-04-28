@@ -360,8 +360,7 @@ impl LoggingSystem {
 }
 
 /// Performance metrics for logging system
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct LoggingMetrics {
     pub total_log_messages: u64,
     pub log_messages_by_level: std::collections::HashMap<String, u64>,
@@ -370,7 +369,6 @@ pub struct LoggingMetrics {
     pub last_rotation: Option<String>,
     pub logging_errors: u64,
 }
-
 
 /// Custom writer that tracks metrics
 #[derive(Debug)]

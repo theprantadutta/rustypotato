@@ -541,7 +541,8 @@ write_timeout = 30
 [logging]
 level = "info"
 format = "Pretty"
-"#.to_string();
+"#
+    .to_string();
 
     std::fs::write(&config_path, config_content).expect("Failed to write config file");
 

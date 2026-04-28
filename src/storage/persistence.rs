@@ -203,8 +203,6 @@ impl AofWriter {
         self.flush_to_disk(true).await
     }
 
-
-
     /// Serialize an AOF entry to bytes
     fn serialize_entry(&self, entry: &AofEntry) -> Result<Vec<u8>> {
         let mut result = Vec::new();

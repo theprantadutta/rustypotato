@@ -63,8 +63,8 @@ async fn test_logging_system_initialization() {
     // For JSON format, each line should be valid JSON
     for line in log_content.lines() {
         if !line.trim().is_empty() {
-            let _: serde_json::Value =
-                serde_json::from_str(line).unwrap_or_else(|_| panic!("Invalid JSON log line: {line}"));
+            let _: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|_| panic!("Invalid JSON log line: {line}"));
         }
     }
 
@@ -566,9 +566,7 @@ async fn test_concurrent_metrics_collection() {
                     .record_command_latency(&format!("CMD_{i}"), Duration::from_micros(j * 10))
                     .await;
 
-                collector
-                    .record_network_bytes(i as u64 * 100, j * 50)
-                    .await;
+                collector.record_network_bytes(i as u64 * 100, j * 50).await;
 
                 if j % 10 == 0 {
                     collector

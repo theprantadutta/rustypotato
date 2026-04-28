@@ -15,7 +15,7 @@ pub static GLOBAL_CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
 /// and return the original values for restoration
 pub fn clean_rustypotato_env() -> HashMap<String, String> {
     let mut original_values = HashMap::new();
-    
+
     // Collect all RUSTYPOTATO_ environment variables
     let rustypotato_vars: Vec<String> = env::vars()
         .filter(|(key, _)| key.starts_with("RUSTYPOTATO_"))
@@ -24,12 +24,12 @@ pub fn clean_rustypotato_env() -> HashMap<String, String> {
             key
         })
         .collect();
-    
+
     // Remove all RUSTYPOTATO_ variables
     for var in rustypotato_vars {
         env::remove_var(&var);
     }
-    
+
     original_values
 }
 
@@ -41,7 +41,7 @@ pub fn restore_env(original_values: HashMap<String, String>) {
             env::remove_var(&key);
         }
     }
-    
+
     // Then restore the original values
     for (key, value) in original_values {
         env::set_var(key, value);

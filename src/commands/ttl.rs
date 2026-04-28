@@ -622,10 +622,7 @@ mod tests {
         for i in 0..10 {
             let key = format!("key{i}");
             let ttl = store.ttl(&key).unwrap();
-            assert!(
-                ttl > 0,
-                "Expected positive TTL for key {key}, got {ttl}"
-            );
+            assert!(ttl > 0, "Expected positive TTL for key {key}, got {ttl}");
         }
     }
 }
