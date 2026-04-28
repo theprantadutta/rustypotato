@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::error::{Result, RustyPotatoError};
 use crate::metrics::{ConnectionEvent, MetricsCollector, Timer};
 use crate::network::{encode_error, ClientConnection, ConnectionPool, RespCodec};
-use crate::storage::MemoryStore;
+use crate::storage::{MemoryStore, PersistenceManager};
 use bytes::BytesMut;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,7 +28,8 @@ pub struct TcpServer {
     command_registry: Arc<CommandRegistry>,
     connection_pool: Arc<ConnectionPool>,
     metrics: Arc<MetricsCollector>,
-    shutdown_tx: Option<broadcast::Sender<()>>,
+    persistence: Option<Arc<PersistenceManager>>,
+    shutdown_tx: broadcast::Sender<()>,
     listening_addr: Option<SocketAddr>,
 }
 
@@ -41,6 +42,7 @@ impl TcpServer {
     ) -> Self {
         let connection_pool = Arc::new(ConnectionPool::new(config.server.max_connections));
         let metrics = Arc::new(MetricsCollector::new());
+        let (shutdown_tx, _) = broadcast::channel(1);
 
         Self {
             config,
@@ -48,7 +50,8 @@ impl TcpServer {
             command_registry,
             connection_pool,
             metrics,
-            shutdown_tx: None,
+            persistence: None,
+            shutdown_tx,
             listening_addr: None,
         }
     }
@@ -61,6 +64,7 @@ impl TcpServer {
         metrics: Arc<MetricsCollector>,
     ) -> Self {
         let connection_pool = Arc::new(ConnectionPool::new(config.server.max_connections));
+        let (shutdown_tx, _) = broadcast::channel(1);
 
         Self {
             config,
@@ -68,9 +72,31 @@ impl TcpServer {
             command_registry,
             connection_pool,
             metrics,
-            shutdown_tx: None,
+            persistence: None,
+            shutdown_tx,
             listening_addr: None,
         }
+    }
+
+    /// Attach a persistence manager. Mutating commands will be logged to its
+    /// AOF after they execute successfully.
+    pub fn with_persistence(mut self, persistence: Arc<PersistenceManager>) -> Self {
+        self.persistence = Some(persistence);
+        self
+    }
+
+    /// Get a clone of the shutdown signal sender so a coordinator (e.g.
+    /// `RustyPotatoServer`) can trigger graceful shutdown after `start()`
+    /// has consumed `self`.
+    pub fn shutdown_signal(&self) -> broadcast::Sender<()> {
+        self.shutdown_tx.clone()
+    }
+
+    /// Get a reference to the connection pool. Useful for shutdown
+    /// coordinators that need to wait for the active-connection count to
+    /// hit zero.
+    pub fn connection_pool(&self) -> Arc<ConnectionPool> {
+        Arc::clone(&self.connection_pool)
     }
 
     /// Get the metrics collector
@@ -106,11 +132,7 @@ impl TcpServer {
 
         info!("RustyPotato TCP server listening on {}", local_addr);
 
-        // Create shutdown channel
-        let (shutdown_tx, _) = broadcast::channel(1);
-        self.shutdown_tx = Some(shutdown_tx.clone());
-
-        // Run the server loop
+        let shutdown_tx = self.shutdown_tx.clone();
         self.run_server_loop(listener, shutdown_tx).await
     }
 
@@ -142,15 +164,16 @@ impl TcpServer {
 
         info!("RustyPotato TCP server listening on {}", local_addr);
 
-        // Create shutdown channel
-        let (shutdown_tx, _) = broadcast::channel(1);
-        self.shutdown_tx = Some(shutdown_tx.clone());
+        let shutdown_tx = self.shutdown_tx.clone();
 
         // Spawn the server loop in the background
         let storage = Arc::clone(&self.storage);
         let command_registry = Arc::clone(&self.command_registry);
         let connection_pool = Arc::clone(&self.connection_pool);
         let config = Arc::clone(&self.config);
+        let metrics = Arc::clone(&self.metrics);
+        let persistence = self.persistence.clone();
+        let bg_shutdown_tx = shutdown_tx.clone();
 
         tokio::spawn(async move {
             let mut temp_server = TcpServer {
@@ -158,11 +181,12 @@ impl TcpServer {
                 storage,
                 command_registry,
                 connection_pool,
-                metrics: Arc::new(MetricsCollector::new()),
-                shutdown_tx: Some(shutdown_tx.clone()),
+                metrics,
+                persistence,
+                shutdown_tx: bg_shutdown_tx.clone(),
                 listening_addr: Some(local_addr),
             };
-            let _ = temp_server.run_server_loop(listener, shutdown_tx).await;
+            let _ = temp_server.run_server_loop(listener, bg_shutdown_tx).await;
         });
 
         Ok(local_addr)
@@ -273,6 +297,7 @@ impl TcpServer {
         let connection_pool = Arc::clone(&self.connection_pool);
         let config = Arc::clone(&self.config);
         let metrics = Arc::clone(&self.metrics);
+        let persistence = self.persistence.clone();
 
         tokio::spawn(async move {
             let connection_result =
@@ -283,6 +308,7 @@ impl TcpServer {
                         command_registry,
                         config,
                         metrics.clone(),
+                        persistence,
                         &mut shutdown_rx,
                     )
                     .await
@@ -381,6 +407,7 @@ impl TcpServer {
         command_registry: Arc<CommandRegistry>,
         config: Arc<Config>,
         metrics: Arc<MetricsCollector>,
+        persistence: Option<Arc<PersistenceManager>>,
         shutdown_rx: &mut broadcast::Receiver<()>,
     ) -> Result<()> {
         let mut codec = RespCodec::new();
@@ -432,6 +459,7 @@ impl TcpServer {
                                 &command_registry,
                                 &config,
                                 &metrics,
+                                persistence.as_ref(),
                             ).await {
                                 Ok(processed_count) => {
                                     commands_processed += processed_count;
@@ -512,6 +540,7 @@ impl TcpServer {
 
     /// Process data in the buffer and execute commands
     /// Returns the number of commands successfully processed
+    #[allow(clippy::too_many_arguments)]
     async fn process_buffer(
         codec: &mut RespCodec,
         buffer: &mut BytesMut,
@@ -520,6 +549,7 @@ impl TcpServer {
         command_registry: &CommandRegistry,
         config: &Config,
         metrics: &MetricsCollector,
+        persistence: Option<&Arc<PersistenceManager>>,
     ) -> Result<u64> {
         let mut commands_processed = 0u64;
 
@@ -527,8 +557,8 @@ impl TcpServer {
         while !buffer.is_empty() {
             let buffer_data = buffer.clone().freeze();
 
-            match codec.decode(&buffer_data) {
-                Ok(Some(mut command)) => {
+            match codec.decode_with_frame(&buffer_data) {
+                Ok(Some((mut command, frame))) => {
                     let (client_id, remote_addr) = {
                         let conn = connection.lock().await;
                         (conn.client_id, conn.remote_addr)
@@ -568,6 +598,20 @@ impl TcpServer {
                             "Slow command '{}' for client {} took {:?}",
                             command.name, client_id, command_duration
                         );
+                    }
+
+                    // Persist mutating commands to AOF on success. Logging
+                    // happens after execution but before the response is
+                    // sent — this matches Redis' AOF-after-execute model
+                    // for `appendfsync everysec`/`no` policies and gives
+                    // `always` policy real durability.
+                    let is_ok = matches!(result, CommandResult::Ok(_));
+                    if is_ok && command_registry.is_mutation(&command.name) {
+                        if let Some(p) = persistence {
+                            if let Err(e) = p.log_command(frame.clone()).await {
+                                error!("AOF log failed for command '{}': {}", command.name, e);
+                            }
+                        }
                     }
 
                     // Send response
@@ -707,12 +751,13 @@ impl TcpServer {
         }
     }
 
-    /// Initiate graceful shutdown
+    /// Initiate graceful shutdown by signaling the accept loop and any
+    /// per-connection handlers. Callers that need to wait for connections
+    /// to drain should follow up by polling
+    /// `connection_pool().active_connections()`.
     pub async fn shutdown(&self) -> Result<()> {
-        if let Some(shutdown_tx) = &self.shutdown_tx {
-            let _ = shutdown_tx.send(());
-            info!("Shutdown signal sent to all connections");
-        }
+        let _ = self.shutdown_tx.send(());
+        info!("Shutdown signal sent to all connections");
         Ok(())
     }
 
@@ -754,9 +799,9 @@ impl TcpServer {
         )
     }
 
-    /// Check if the server is running
+    /// Check if the server has been started (i.e. has a bound listener).
     pub fn is_running(&self) -> bool {
-        self.shutdown_tx.is_some()
+        self.listening_addr.is_some()
     }
 
     /// Get the actual listening address (only available after start() is called)

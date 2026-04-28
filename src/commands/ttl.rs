@@ -74,6 +74,10 @@ impl Command for TtlCommand {
     fn arity(&self) -> CommandArity {
         CommandArity::Fixed(2) // TTL key
     }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
 }
 #[cfg(test)]
 mod tests {

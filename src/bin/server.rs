@@ -239,15 +239,43 @@ fn validate_environment(config: &Config) -> Result<(), Box<dyn std::error::Error
         }
     }
 
-    // Validate AOF directory if persistence is enabled
+    // Validate AOF directory if persistence is enabled. Two checks:
+    //  1) the directory exists (or can be created), and
+    //  2) it is actually writable. We open + immediately delete a probe
+    //     file rather than just `parent.exists()` because a directory on a
+    //     read-only mount or with restrictive ACLs can pass `exists()` and
+    //     still fail every subsequent write.
     if config.storage.aof_enabled {
         if let Some(parent) = config.storage.aof_path.parent() {
-            if !parent.exists() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     format!("Failed to create AOF directory {}: {}", parent.display(), e)
                 })?;
                 info!("Created AOF directory: {}", parent.display());
             }
+
+            let probe = if parent.as_os_str().is_empty() {
+                std::path::PathBuf::from(".rustypotato-aof-write-probe")
+            } else {
+                parent.join(".rustypotato-aof-write-probe")
+            };
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&probe)
+                .and_then(|_| std::fs::remove_file(&probe))
+                .map_err(|e| {
+                    format!(
+                        "AOF directory {} is not writable: {e}",
+                        if parent.as_os_str().is_empty() {
+                            std::path::Path::new(".")
+                        } else {
+                            parent
+                        }
+                        .display()
+                    )
+                })?;
         }
     }
 
@@ -468,20 +496,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         e
     })?;
 
-    // Create shared components for health checking
-    let storage = std::sync::Arc::new(rustypotato::MemoryStore::new());
-    let metrics = std::sync::Arc::new(rustypotato::MetricsCollector::new());
-
-    // Create server with shared components
-    let server = rustypotato::RustyPotatoServer::with_components(
-        config.clone(),
-        std::sync::Arc::clone(&storage),
-        std::sync::Arc::clone(&metrics),
-    )
-    .map_err(|e| {
-        error!("Failed to create server instance: {}", e);
-        e
-    })?;
+    // Build the server. `RustyPotatoServer::open` handles AOF recovery
+    // and persistence wiring when `config.storage.aof_enabled` is true.
+    let server = rustypotato::RustyPotatoServer::open(config.clone())
+        .await
+        .map_err(|e| {
+            error!("Failed to create server instance: {}", e);
+            e
+        })?;
+    let storage = server.storage_arc();
+    let metrics = server.metrics_arc();
 
     // Set up log rotation manager
     let log_rotation_config = LogRotationConfig {

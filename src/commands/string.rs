@@ -66,6 +66,10 @@ impl Command for GetCommand {
     fn arity(&self) -> CommandArity {
         CommandArity::Fixed(2) // GET key
     }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
 }
 
 /// DEL command implementation
@@ -135,6 +139,10 @@ impl Command for ExistsCommand {
 
     fn arity(&self) -> CommandArity {
         CommandArity::AtLeast(2) // EXISTS key [key ...]
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
     }
 }
 #[cfg(test)]

@@ -16,6 +16,13 @@ pub trait Command: Send + Sync {
 
     /// Get the command arity specification
     fn arity(&self) -> super::CommandArity;
+
+    /// Whether this command mutates the store and therefore should be
+    /// recorded to the AOF on success. Read-only commands return false.
+    /// Defaults to true; override on read-only commands.
+    fn is_mutation(&self) -> bool {
+        true
+    }
 }
 
 /// Command execution result
@@ -155,6 +162,15 @@ impl CommandRegistry {
         self.commands
             .get(&name.to_uppercase())
             .map(|cmd| (cmd.name(), cmd.arity()))
+    }
+
+    /// Whether a registered command mutates the store. Returns `false` for
+    /// unregistered names (so unknown commands aren't logged to the AOF).
+    pub fn is_mutation(&self, name: &str) -> bool {
+        self.commands
+            .get(&name.to_uppercase())
+            .map(|cmd| cmd.is_mutation())
+            .unwrap_or(false)
     }
 }
 

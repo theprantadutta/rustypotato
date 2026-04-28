@@ -1,12 +1,10 @@
 //! In-memory storage implementation using DashMap
 
 use crate::error::{Result, RustyPotatoError};
-use crate::storage::persistence::{AofCommand, PersistenceManager};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::Arc;
 use std::time::Instant;
 
 /// Value types supported by RustyPotato
@@ -261,7 +259,6 @@ pub struct StoredValue {
 pub struct MemoryStore {
     data: DashMap<String, StoredValue>,
     expiration_index: DashMap<String, Instant>,
-    persistence: Option<Arc<PersistenceManager>>,
 }
 
 impl MemoryStore {
@@ -270,92 +267,6 @@ impl MemoryStore {
         Self {
             data: DashMap::new(),
             expiration_index: DashMap::new(),
-            persistence: None,
-        }
-    }
-
-    /// Create a new memory store with persistence
-    pub fn with_persistence(persistence: Arc<PersistenceManager>) -> Self {
-        Self {
-            data: DashMap::new(),
-            expiration_index: DashMap::new(),
-            persistence: Some(persistence),
-        }
-    }
-
-    /// Recover data from persistence layer
-    pub async fn recover_from_persistence(&self) -> Result<usize> {
-        if let Some(ref persistence) = self.persistence {
-            let entries = persistence.recover().await?;
-            let mut recovered_count = 0;
-
-            for entry in entries {
-                match entry.command {
-                    AofCommand::Set { key, value } => {
-                        let stored_value = StoredValue::new(value);
-                        self.data.insert(key, stored_value);
-                        recovered_count += 1;
-                    }
-                    AofCommand::SetWithExpiration {
-                        key,
-                        value,
-                        expires_at,
-                    } => {
-                        let expires_instant = self.timestamp_to_instant(expires_at);
-                        if expires_instant > Instant::now() {
-                            let stored_value =
-                                StoredValue::new_with_expiration(value, expires_instant);
-                            self.expiration_index.insert(key.clone(), expires_instant);
-                            self.data.insert(key, stored_value);
-                            recovered_count += 1;
-                        }
-                        // Skip expired keys during recovery
-                    }
-                    AofCommand::Delete { key } => {
-                        self.data.remove(&key);
-                        self.expiration_index.remove(&key);
-                    }
-                    AofCommand::Expire { key, expires_at } => {
-                        let expires_instant = self.timestamp_to_instant(expires_at);
-                        if let Some(mut entry) = self.data.get_mut(&key) {
-                            if expires_instant > Instant::now() {
-                                entry.set_expiration(expires_instant);
-                                self.expiration_index.insert(key, expires_instant);
-                            } else {
-                                // Key should be expired, remove it
-                                drop(entry);
-                                self.data.remove(&key);
-                                self.expiration_index.remove(&key);
-                            }
-                        }
-                    }
-                }
-            }
-
-            tracing::info!("Recovered {} keys from persistence", recovered_count);
-            Ok(recovered_count)
-        } else {
-            Ok(0)
-        }
-    }
-
-    /// Convert timestamp to Instant (helper method)
-    fn timestamp_to_instant(&self, timestamp: u64) -> Instant {
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-        let now = Instant::now();
-        let system_now = SystemTime::now();
-        let target_system_time = UNIX_EPOCH + Duration::from_secs(timestamp);
-
-        if target_system_time > system_now {
-            // Future time
-            let duration_from_now = target_system_time
-                .duration_since(system_now)
-                .unwrap_or_default();
-            now + duration_from_now
-        } else {
-            // Past time (treat as expired)
-            now - Duration::from_secs(1)
         }
     }
 
@@ -377,18 +288,13 @@ impl MemoryStore {
     {
         let key_string = key.into();
         let value_type = value.into();
-        let stored_value = StoredValue::new(value_type.clone());
+        let stored_value = StoredValue::new(value_type);
 
         // Remove from expiration index if it exists
         self.expiration_index.remove(&key_string);
 
         // Insert the new value
-        self.data.insert(key_string.clone(), stored_value);
-
-        // Log to persistence
-        if let Some(ref persistence) = self.persistence {
-            persistence.log_set(key_string, value_type).await?;
-        }
+        self.data.insert(key_string, stored_value);
 
         Ok(())
     }
@@ -401,21 +307,14 @@ impl MemoryStore {
     {
         let key_string = key.into();
         let value_type = value.into();
-        let stored_value = StoredValue::new_with_ttl(value_type.clone(), ttl_seconds);
+        let stored_value = StoredValue::new_with_ttl(value_type, ttl_seconds);
         let expires_at = stored_value.expires_at.unwrap();
 
         // Update expiration index
         self.expiration_index.insert(key_string.clone(), expires_at);
 
         // Insert the new value
-        self.data.insert(key_string.clone(), stored_value);
-
-        // Log to persistence
-        if let Some(ref persistence) = self.persistence {
-            persistence
-                .log_set_with_expiration(key_string, value_type, expires_at)
-                .await?;
-        }
+        self.data.insert(key_string, stored_value);
 
         Ok(())
     }
@@ -433,20 +332,13 @@ impl MemoryStore {
     {
         let key_string = key.into();
         let value_type = value.into();
-        let stored_value = StoredValue::new_with_expiration(value_type.clone(), expires_at);
+        let stored_value = StoredValue::new_with_expiration(value_type, expires_at);
 
         // Update expiration index
         self.expiration_index.insert(key_string.clone(), expires_at);
 
         // Insert the new value
-        self.data.insert(key_string.clone(), stored_value);
-
-        // Log to persistence
-        if let Some(ref persistence) = self.persistence {
-            persistence
-                .log_set_with_expiration(key_string, value_type, expires_at)
-                .await?;
-        }
+        self.data.insert(key_string, stored_value);
 
         Ok(())
     }
@@ -498,13 +390,6 @@ impl MemoryStore {
 
         // Remove from main data store
         let was_removed = self.data.remove(key_str).is_some();
-
-        // Log to persistence if key was actually removed
-        if was_removed {
-            if let Some(ref persistence) = self.persistence {
-                persistence.log_delete(key_str.to_string()).await?;
-            }
-        }
 
         Ok(was_removed)
     }
@@ -577,13 +462,6 @@ impl MemoryStore {
             // Update expiration index
             self.expiration_index
                 .insert(key_str.to_string(), expires_at);
-
-            // Log to persistence
-            if let Some(ref persistence) = self.persistence {
-                persistence
-                    .log_expire(key_str.to_string(), expires_at)
-                    .await?;
-            }
 
             Ok(true)
         } else {
@@ -720,13 +598,8 @@ impl MemoryStore {
             }
         };
 
-        // Log to persistence
-        if let Some(ref persistence) = self.persistence {
-            persistence
-                .log_set(key_string, ValueType::Integer(result))
-                .await?;
-        }
-
+        // Persistence logging happens at the dispatch layer (see network::server)
+        // after a successful command completes.
         Ok(result)
     }
 
@@ -790,15 +663,8 @@ impl MemoryStore {
             }
         };
 
-        // Log to persistence
-        if let Some(ref persistence) = self.persistence {
-            // For now, we'll serialize the entire hash for persistence
-            // In a production system, we'd want more granular hash operations in AOF
-            if let Some(entry) = self.data.get(&key_string) {
-                persistence.log_set(key_string, entry.value.clone()).await?;
-            }
-        }
-
+        // Persistence logging happens at the dispatch layer.
+        let _ = key_string;
         Ok(is_new_field)
     }
 
@@ -891,17 +757,7 @@ impl MemoryStore {
                     }
                 }
             }
-
-            // Log to persistence
-            if let Some(ref persistence) = self.persistence {
-                if should_remove_key {
-                    persistence.log_delete(key_str.to_string()).await?;
-                } else if let Some(entry) = self.data.get(key_str) {
-                    persistence
-                        .log_set(key_str.to_string(), entry.value.clone())
-                        .await?;
-                }
-            }
+            // Persistence logging happens at the dispatch layer.
         }
 
         Ok(was_removed)

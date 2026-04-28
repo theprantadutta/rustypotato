@@ -31,13 +31,19 @@ impl RespCodec {
 
     /// Decode RESP data into a ParsedCommand
     pub fn decode(&mut self, data: &[u8]) -> Result<Option<ParsedCommand>> {
-        self.buffer.extend_from_slice(data);
+        Ok(self.decode_with_frame(data)?.map(|(cmd, _frame)| cmd))
+    }
 
-        if let Some(command) = self.try_parse_command()? {
-            Ok(Some(command))
-        } else {
-            Ok(None) // Need more data
-        }
+    /// Decode RESP data into a ParsedCommand together with the raw bytes
+    /// that comprised the frame. Used by the dispatch layer when it needs
+    /// to forward the original bytes to the AOF writer (so the on-disk
+    /// format is just the wire format the client sent).
+    pub fn decode_with_frame(
+        &mut self,
+        data: &[u8],
+    ) -> Result<Option<(ParsedCommand, bytes::Bytes)>> {
+        self.buffer.extend_from_slice(data);
+        self.try_parse_command_with_frame()
     }
 
     /// Encode a single ResponseValue
@@ -77,8 +83,9 @@ impl RespCodec {
         Ok(())
     }
 
-    /// Try to parse a complete command from the buffer
-    fn try_parse_command(&mut self) -> Result<Option<ParsedCommand>> {
+    /// Try to parse a complete command from the buffer along with the raw
+    /// bytes that comprised the frame.
+    fn try_parse_command_with_frame(&mut self) -> Result<Option<(ParsedCommand, bytes::Bytes)>> {
         if self.buffer.is_empty() {
             return Ok(None);
         }
@@ -118,10 +125,14 @@ impl RespCodec {
                 // Use a placeholder UUID for now - this will be set by the connection handler
                 let parsed_command = ParsedCommand::new(command_name, args, uuid::Uuid::nil());
 
+                // Snapshot the consumed bytes (this IS the wire frame) before
+                // advancing the buffer; the AOF writer needs the raw frame.
+                let frame = bytes::Bytes::copy_from_slice(&self.buffer[..consumed]);
+
                 // Remove consumed bytes from buffer
                 self.buffer.advance(consumed);
 
-                Ok(Some(parsed_command))
+                Ok(Some((parsed_command, frame)))
             }
             Some(_) => Err(RustyPotatoError::ProtocolError {
                 message: "Expected array for command".to_string(),

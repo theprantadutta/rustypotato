@@ -30,13 +30,16 @@ pub use commands::{CommandRegistry, CommandResult, ResponseValue};
 pub use metrics::{MetricsCollector, MetricsServer};
 pub use monitoring::{HealthChecker, HealthStatus, LogRotationManager, MonitoringServer};
 pub use network::TcpServer;
-pub use storage::{MemoryStore, StoredValue, ValueType};
+pub use storage::{replay_aof_file, MemoryStore, PersistenceManager, StoredValue, ValueType};
 
+use crate::network::ConnectionPool;
 use commands::{
     DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand, HexistsCommand,
     HgetCommand, HgetallCommand, HsetCommand, IncrCommand, SetCommand, TtlCommand,
 };
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast;
 
 /// RustyPotato server instance with fully integrated components
 pub struct RustyPotatoServer {
@@ -44,6 +47,14 @@ pub struct RustyPotatoServer {
     storage: Arc<MemoryStore>,
     command_registry: Arc<CommandRegistry>,
     metrics: Arc<MetricsCollector>,
+    persistence: Option<Arc<PersistenceManager>>,
+    /// Captured from `TcpServer` at construction time. Stays accessible
+    /// even after `start()` has consumed the inner `TcpServer`, so
+    /// `shutdown()` can signal the running accept loop.
+    shutdown_tx: broadcast::Sender<()>,
+    /// Same lifecycle as `shutdown_tx`. `shutdown()` polls this to wait
+    /// for in-flight connections to drain.
+    connection_pool: Arc<ConnectionPool>,
     tcp_server: Option<TcpServer>,
 }
 
@@ -107,13 +118,82 @@ impl RustyPotatoServer {
             Arc::clone(&metrics),
         );
 
+        // Capture shutdown signal + connection pool BEFORE start() consumes
+        // the TcpServer, so shutdown() remains functional after that.
+        let shutdown_tx = tcp_server.shutdown_signal();
+        let connection_pool = tcp_server.connection_pool();
+
         Ok(Self {
             config,
             storage,
             command_registry,
             metrics,
+            persistence: None,
+            shutdown_tx,
+            connection_pool,
             tcp_server: Some(tcp_server),
         })
+    }
+
+    /// Attach a persistence manager to this server. The dispatch layer
+    /// will log mutating commands to the manager's AOF after they
+    /// successfully execute. Must be called before `start()`.
+    pub fn with_persistence(mut self, persistence: Arc<PersistenceManager>) -> Self {
+        self.persistence = Some(Arc::clone(&persistence));
+        if let Some(server) = self.tcp_server.take() {
+            self.tcp_server = Some(server.with_persistence(persistence));
+        }
+        self
+    }
+
+    /// Build a server from a config, automatically wiring persistence and
+    /// replaying any existing AOF file before returning. The returned
+    /// server is ready to `start()`.
+    ///
+    /// This is the constructor that mirrors what the production binary
+    /// does and is what integration tests should use to exercise the AOF
+    /// flow end-to-end.
+    pub async fn open(config: Config) -> Result<Self> {
+        let aof_enabled = config.storage.aof_enabled;
+        let aof_path = config.storage.aof_path.clone();
+        let mut server = Self::new(config.clone())?;
+
+        if !aof_enabled {
+            return Ok(server);
+        }
+
+        // Replay existing AOF onto storage before any client touches it.
+        // Build a registry mirror that can dispatch every command we know
+        // how to log.
+        let mut replay_registry = CommandRegistry::new();
+        replay_registry.register(Box::new(SetCommand));
+        replay_registry.register(Box::new(GetCommand));
+        replay_registry.register(Box::new(DelCommand));
+        replay_registry.register(Box::new(ExistsCommand));
+        replay_registry.register(Box::new(ExpireCommand));
+        replay_registry.register(Box::new(TtlCommand));
+        replay_registry.register(Box::new(IncrCommand));
+        replay_registry.register(Box::new(DecrCommand));
+        replay_registry.register(Box::new(HsetCommand));
+        replay_registry.register(Box::new(HgetCommand));
+        replay_registry.register(Box::new(HdelCommand));
+        replay_registry.register(Box::new(HgetallCommand));
+        replay_registry.register(Box::new(HexistsCommand));
+
+        let replay_storage = Arc::clone(&server.storage);
+        replay_aof_file(&aof_path, |cmd| {
+            let storage = Arc::clone(&replay_storage);
+            let registry = &replay_registry;
+            async move {
+                let _ = registry.execute(&cmd, &storage).await;
+                Ok(())
+            }
+        })
+        .await?;
+
+        let persistence = Arc::new(PersistenceManager::new(&config).await?);
+        server = server.with_persistence(persistence);
+        Ok(server)
     }
 
     /// Start the server and begin accepting connections
@@ -152,12 +232,42 @@ impl RustyPotatoServer {
         }
     }
 
-    /// Shutdown the server gracefully
+    /// Gracefully shut the server down. Signals the accept loop and any
+    /// per-connection handlers to stop, then waits up to 30 seconds for
+    /// active connections to drain. If a persistence manager is attached
+    /// it is asked to flush+close.
     pub async fn shutdown(&self) -> Result<()> {
-        // Note: Since we moved tcp_server in start(), we can't access it here
-        // In a production system, we'd keep a reference to the server for shutdown
-        // For now, this is a placeholder
         tracing::info!("Server shutdown requested");
+
+        // Tell the accept loop and all connection handlers to exit.
+        let _ = self.shutdown_tx.send(());
+
+        // Wait for connection drain.
+        let drain_timeout = Duration::from_secs(30);
+        let drain_start = std::time::Instant::now();
+        loop {
+            let active = self.connection_pool.active_connections().await;
+            if active == 0 {
+                tracing::info!("All connections drained");
+                break;
+            }
+            if drain_start.elapsed() >= drain_timeout {
+                tracing::warn!(
+                    "Drain timeout reached with {active} connections still active; \
+                     proceeding with shutdown anyway"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Flush persistence on the way out.
+        if let Some(p) = &self.persistence {
+            if let Err(e) = p.shutdown().await {
+                tracing::error!("Persistence shutdown failed: {e}");
+            }
+        }
+
         Ok(())
     }
 
@@ -169,6 +279,18 @@ impl RustyPotatoServer {
     /// Get a reference to the storage layer
     pub fn storage(&self) -> &MemoryStore {
         &self.storage
+    }
+
+    /// Get a shared (`Arc`) handle to the storage layer. Useful for
+    /// passing into other components (e.g. the health checker) that need
+    /// to outlive the server reference.
+    pub fn storage_arc(&self) -> Arc<MemoryStore> {
+        Arc::clone(&self.storage)
+    }
+
+    /// Get a shared (`Arc`) handle to the metrics collector.
+    pub fn metrics_arc(&self) -> Arc<MetricsCollector> {
+        Arc::clone(&self.metrics)
     }
 
     /// Get a reference to the command registry

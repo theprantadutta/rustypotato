@@ -69,6 +69,10 @@ impl Command for HgetCommand {
     fn arity(&self) -> CommandArity {
         CommandArity::Fixed(3) // HGET key field
     }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
 }
 
 /// HDEL command implementation
@@ -144,6 +148,10 @@ impl Command for HgetallCommand {
     fn arity(&self) -> CommandArity {
         CommandArity::Fixed(2) // HGETALL key
     }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
 }
 
 /// HEXISTS command implementation
@@ -174,6 +182,10 @@ impl Command for HexistsCommand {
 
     fn arity(&self) -> CommandArity {
         CommandArity::Fixed(3) // HEXISTS key field
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
     }
 }
 

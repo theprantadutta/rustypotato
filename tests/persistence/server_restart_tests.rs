@@ -40,7 +40,7 @@ async fn test_basic_persistence_and_recovery() {
     // Phase 1: Start server, add data, shutdown
     let addr = {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -80,7 +80,7 @@ async fn test_basic_persistence_and_recovery() {
     // Phase 2: Start new server instance and verify data recovery
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let new_addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -122,7 +122,7 @@ async fn test_persistence_with_ttl() {
     // Phase 1: Set keys with TTL
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -157,7 +157,7 @@ async fn test_persistence_with_ttl() {
     // Phase 2: Restart and verify TTL handling
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -195,7 +195,7 @@ async fn test_persistence_with_deletions() {
     // Phase 1: Set and delete keys
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -227,7 +227,7 @@ async fn test_persistence_with_deletions() {
     // Phase 2: Restart and verify deletions persisted
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -265,7 +265,7 @@ async fn test_persistence_with_overwrites() {
     // Phase 1: Set and overwrite keys multiple times
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -305,7 +305,7 @@ async fn test_persistence_with_overwrites() {
     // Phase 2: Restart and verify final value
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -330,7 +330,7 @@ async fn test_multiple_restart_cycles() {
     // Perform multiple restart cycles, adding data each time
     for cycle in 0..3 {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -368,7 +368,7 @@ async fn test_multiple_restart_cycles() {
     // Final verification
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -405,7 +405,7 @@ async fn test_persistence_with_large_dataset() {
     // Phase 1: Create large dataset
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -440,7 +440,7 @@ async fn test_persistence_with_large_dataset() {
     // Phase 2: Restart and verify all data
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(500)).await; // Give more time for large recovery
@@ -480,7 +480,7 @@ async fn test_persistence_error_recovery() {
     // Phase 1: Create valid AOF file
     {
         let config = create_persistent_config(aof_path.clone());
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -514,7 +514,7 @@ async fn test_persistence_error_recovery() {
     // Phase 3: Restart and verify recovery handles corruption gracefully
     {
         let config = create_persistent_config(aof_path.clone());
-        let server_result = RustyPotatoServer::new(config);
+        let server_result = RustyPotatoServer::open(config).await;
         
         // Server should either:
         // 1. Start successfully and recover valid data (ignoring invalid entries)
@@ -556,7 +556,7 @@ async fn test_persistence_without_aof_enabled() {
         config.storage.aof_enabled = false; // Explicitly disable
         config.storage.aof_path = aof_path.clone();
         
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;
@@ -582,7 +582,7 @@ async fn test_persistence_without_aof_enabled() {
         config.storage.aof_enabled = false;
         config.storage.aof_path = aof_path.clone();
         
-        let mut server = RustyPotatoServer::new(config).unwrap();
+        let mut server = RustyPotatoServer::open(config).await.unwrap();
         let addr = server.start_with_addr().await.unwrap();
         
         sleep(Duration::from_millis(100)).await;

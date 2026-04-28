@@ -9,7 +9,7 @@ pub mod persistence;
 
 pub use expiration::{ExpirationEntry, ExpirationManager};
 pub use memory::{MemoryStore, StoredValue, ValueType};
-pub use persistence::{AofWriter, PersistenceManager};
+pub use persistence::{replay_aof_file, PersistenceManager};
 
 /// Storage operation results
 pub type StorageResult<T> = Result<T, crate::error::RustyPotatoError>;
