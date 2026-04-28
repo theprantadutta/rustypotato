@@ -267,8 +267,6 @@ struct ServerArgs {
     port: Option<u16>,
     bind_address: Option<String>,
     log_level: Option<String>,
-    #[allow(dead_code)]
-    daemonize: bool,
     version: bool,
 }
 
@@ -313,13 +311,6 @@ fn parse_args() -> ServerArgs {
                 .value_parser(["trace", "debug", "info", "warn", "error"])
         )
         .arg(
-            Arg::new("daemonize")
-                .short('d')
-                .long("daemonize")
-                .help("Run as daemon (background process)")
-                .action(clap::ArgAction::SetTrue)
-        )
-        .arg(
             Arg::new("version")
                 .short('V')
                 .long("version")
@@ -333,7 +324,6 @@ fn parse_args() -> ServerArgs {
         port: matches.get_one::<u16>("port").copied(),
         bind_address: matches.get_one::<String>("bind").cloned(),
         log_level: matches.get_one::<String>("log-level").cloned(),
-        daemonize: matches.get_flag("daemonize"),
         version: matches.get_flag("version"),
     }
 }

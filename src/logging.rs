@@ -6,7 +6,6 @@
 use crate::config::{Config, LogFormat};
 use crate::error::{Result, RustyPotatoError};
 use crate::monitoring::LogRotationManager;
-use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{error, info, warn, Level};
@@ -359,55 +358,6 @@ impl LoggingSystem {
     }
 }
 
-/// Performance metrics for logging system
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub struct LoggingMetrics {
-    pub total_log_messages: u64,
-    pub log_messages_by_level: std::collections::HashMap<String, u64>,
-    pub log_file_size_bytes: u64,
-    pub rotated_files_count: usize,
-    pub last_rotation: Option<String>,
-    pub logging_errors: u64,
-}
-
-/// Custom writer that tracks metrics
-#[derive(Debug)]
-pub struct MetricsWriter<W: Write> {
-    inner: W,
-    metrics: Arc<std::sync::Mutex<LoggingMetrics>>,
-}
-
-impl<W: Write> MetricsWriter<W> {
-    pub fn new(writer: W) -> Self {
-        Self {
-            inner: writer,
-            metrics: Arc::new(std::sync::Mutex::new(LoggingMetrics::default())),
-        }
-    }
-
-    pub fn get_metrics(&self) -> LoggingMetrics {
-        self.metrics.lock().unwrap().clone()
-    }
-}
-
-impl<W: Write> Write for MetricsWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let result = self.inner.write(buf);
-
-        if let Ok(bytes_written) = result {
-            let mut metrics = self.metrics.lock().unwrap();
-            metrics.total_log_messages += 1;
-            metrics.log_file_size_bytes += bytes_written as u64;
-        }
-
-        result
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 /// Health check for logging system
 pub async fn check_logging_health(config: &Config) -> Result<bool> {
     // Check if we can write to the log file if file logging is enabled
@@ -511,53 +461,5 @@ mod tests {
 
         let health = check_logging_health(&config).await.unwrap();
         assert!(!health);
-    }
-
-    #[test]
-    fn test_metrics_writer() {
-        let mut buffer = Vec::new();
-        let mut writer = MetricsWriter::new(&mut buffer);
-
-        writer.write_all(b"test log message\n").unwrap();
-        writer.flush().unwrap();
-
-        let metrics = writer.get_metrics();
-        assert_eq!(metrics.total_log_messages, 1);
-        assert_eq!(metrics.log_file_size_bytes, 17); // "test log message\n".len()
-
-        assert_eq!(buffer, b"test log message\n");
-    }
-
-    #[test]
-    fn test_logging_metrics_default() {
-        let metrics = LoggingMetrics::default();
-
-        assert_eq!(metrics.total_log_messages, 0);
-        assert!(metrics.log_messages_by_level.is_empty());
-        assert_eq!(metrics.log_file_size_bytes, 0);
-        assert_eq!(metrics.rotated_files_count, 0);
-        assert!(metrics.last_rotation.is_none());
-        assert_eq!(metrics.logging_errors, 0);
-    }
-
-    #[test]
-    fn test_logging_metrics_serialization() {
-        let mut metrics = LoggingMetrics {
-            total_log_messages: 100,
-            ..Default::default()
-        };
-        metrics.log_messages_by_level.insert("info".to_string(), 80);
-        metrics
-            .log_messages_by_level
-            .insert("error".to_string(), 20);
-        metrics.log_file_size_bytes = 1024;
-
-        let json = serde_json::to_string(&metrics).unwrap();
-        let deserialized: LoggingMetrics = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.total_log_messages, 100);
-        assert_eq!(deserialized.log_messages_by_level.get("info"), Some(&80));
-        assert_eq!(deserialized.log_messages_by_level.get("error"), Some(&20));
-        assert_eq!(deserialized.log_file_size_bytes, 1024);
     }
 }

@@ -1,5 +1,7 @@
 # Rust
 /target/
+fuzz/target/
+fuzz/Cargo.lock
 # Note: Cargo.lock should be committed for applications (not libraries)
 
 # IDE

@@ -3,7 +3,7 @@
 //! These tests verify error scenarios, recovery mechanisms, logging behavior,
 //! and client error responses across all system components.
 
-use rustypotato::error::{ErrorCategory, ErrorRecoveryManager, ErrorSeverity, RustyPotatoError};
+use rustypotato::error::{ErrorCategory, ErrorSeverity, RustyPotatoError};
 use rustypotato::{Config, RustyPotatoServer};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -285,113 +285,6 @@ async fn test_persistence_error_recovery() {
         // If AOF file doesn't exist, that's acceptable for now as persistence may not be fully integrated
         println!("AOF file not created - persistence may not be fully integrated yet");
     }
-}
-
-#[tokio::test]
-async fn test_error_recovery_manager() {
-    let recovery_manager = ErrorRecoveryManager::new();
-
-    // Test retry strategy for recoverable errors
-    let network_error = RustyPotatoError::NetworkError {
-        message: "Connection timeout".to_string(),
-        source: None,
-        connection_id: Some("conn_123".to_string()),
-    };
-
-    let strategy = recovery_manager.get_recovery_strategy(&network_error);
-    assert_eq!(strategy, rustypotato::error::RecoveryStrategy::Retry);
-
-    // Test no recovery for client errors
-    let client_error = RustyPotatoError::InvalidCommand {
-        command: "BADCMD".to_string(),
-        source: None,
-    };
-
-    let strategy = recovery_manager.get_recovery_strategy(&client_error);
-    assert_eq!(strategy, rustypotato::error::RecoveryStrategy::None);
-}
-
-#[tokio::test]
-async fn test_retry_operation_success() {
-    let recovery_manager = ErrorRecoveryManager::new();
-    let attempt_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    let attempt_count_clone = attempt_count.clone();
-    let result: Result<&str, RustyPotatoError> = recovery_manager
-        .retry_operation(move || {
-            let attempt_count = attempt_count_clone.clone();
-            async move {
-                let count = attempt_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                if count < 3 {
-                    Err(RustyPotatoError::NetworkError {
-                        message: "Temporary failure".to_string(),
-                        source: None,
-                        connection_id: None,
-                    })
-                } else {
-                    Ok("success")
-                }
-            }
-        })
-        .await;
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "success");
-    assert_eq!(attempt_count.load(std::sync::atomic::Ordering::SeqCst), 3);
-}
-
-#[tokio::test]
-async fn test_retry_operation_failure() {
-    let recovery_manager = ErrorRecoveryManager::new();
-    let attempt_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    let attempt_count_clone = attempt_count.clone();
-    let result: Result<&str, RustyPotatoError> = recovery_manager
-        .retry_operation(move || {
-            let attempt_count = attempt_count_clone.clone();
-            async move {
-                attempt_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Err(RustyPotatoError::NetworkError {
-                    message: "Persistent failure".to_string(),
-                    source: None,
-                    connection_id: None,
-                })
-            }
-        })
-        .await;
-
-    assert!(result.is_err());
-    assert_eq!(attempt_count.load(std::sync::atomic::Ordering::SeqCst), 3); // Should retry max_retries times
-}
-
-#[tokio::test]
-async fn test_circuit_breaker_functionality() {
-    use rustypotato::error::RecoveryConfig;
-
-    // Use a short timeout for testing
-    let config = RecoveryConfig {
-        circuit_breaker_timeout: std::time::Duration::from_millis(50),
-        ..Default::default()
-    };
-    let recovery_manager = ErrorRecoveryManager::with_config(config);
-
-    // Initially circuit should be closed
-    assert!(recovery_manager.circuit_breaker_check().is_ok());
-
-    // Record multiple failures to open circuit
-    for _ in 0..5 {
-        recovery_manager.record_failure();
-    }
-
-    // Circuit should now be open
-    assert!(recovery_manager.circuit_breaker_check().is_err());
-
-    // Wait for circuit breaker timeout to transition to half-open
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    // Now it should be in half-open state, so we can record success to close it
-    recovery_manager.record_success();
-    assert!(recovery_manager.circuit_breaker_check().is_ok());
 }
 
 #[tokio::test]

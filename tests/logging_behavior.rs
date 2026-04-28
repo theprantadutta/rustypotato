@@ -5,14 +5,13 @@
 
 use rustypotato::{
     config::{Config, LogFormat},
-    logging::{check_logging_health, LoggingMetrics, LoggingSystem, MetricsWriter},
+    logging::{check_logging_health, LoggingSystem},
     metrics::{ConnectionEvent, MetricsCollector, StorageOperation, Timer},
     monitoring::{
         HealthChecker, LogRotationConfig, LogRotationManager, MonitoringServer, RotationPolicy,
     },
     storage::MemoryStore,
 };
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -98,26 +97,6 @@ async fn test_logging_health_check() {
         !health,
         "File logging with invalid path should be unhealthy"
     );
-}
-
-#[tokio::test]
-async fn test_metrics_writer() {
-    let mut buffer = Vec::new();
-    let mut writer = MetricsWriter::new(&mut buffer);
-
-    // Write some test data
-    writer.write_all(b"First log message\n").unwrap();
-    writer.write_all(b"Second log message\n").unwrap();
-    writer.flush().unwrap();
-
-    // Check metrics
-    let metrics = writer.get_metrics();
-    assert_eq!(metrics.total_log_messages, 2);
-    assert_eq!(metrics.log_file_size_bytes, 37); // Total bytes written
-
-    // Check buffer content
-    let content = String::from_utf8(buffer).unwrap();
-    assert_eq!(content, "First log message\nSecond log message\n");
 }
 
 #[tokio::test]
@@ -489,43 +468,6 @@ async fn test_histogram_accuracy() {
 }
 
 #[tokio::test]
-async fn test_logging_metrics_serialization() {
-    let mut metrics = LoggingMetrics {
-        total_log_messages: 1000,
-        log_file_size_bytes: 1024 * 1024,
-        rotated_files_count: 3,
-        last_rotation: Some("2024-01-01T00:00:00Z".to_string()),
-        logging_errors: 5,
-        ..Default::default()
-    };
-    metrics
-        .log_messages_by_level
-        .insert("info".to_string(), 800);
-    metrics
-        .log_messages_by_level
-        .insert("warn".to_string(), 150);
-    metrics
-        .log_messages_by_level
-        .insert("error".to_string(), 50);
-
-    // Test JSON serialization
-    let json = serde_json::to_string(&metrics).unwrap();
-    let deserialized: LoggingMetrics = serde_json::from_str(&json).unwrap();
-
-    assert_eq!(deserialized.total_log_messages, 1000);
-    assert_eq!(deserialized.log_messages_by_level.get("info"), Some(&800));
-    assert_eq!(deserialized.log_messages_by_level.get("warn"), Some(&150));
-    assert_eq!(deserialized.log_messages_by_level.get("error"), Some(&50));
-    assert_eq!(deserialized.log_file_size_bytes, 1024 * 1024);
-    assert_eq!(deserialized.rotated_files_count, 3);
-    assert_eq!(
-        deserialized.last_rotation,
-        Some("2024-01-01T00:00:00Z".to_string())
-    );
-    assert_eq!(deserialized.logging_errors, 5);
-}
-
-#[tokio::test]
 async fn test_error_handling_in_logging() {
     // Test logging system with invalid configuration
     let mut config = Config::default();
@@ -545,9 +487,9 @@ async fn test_error_handling_in_logging() {
     let result = logging_system.initialize().await;
 
     // May fail depending on permissions, but should handle gracefully
-    if result.is_err() {
+    if let Err(err) = result {
         // Error should be properly formatted
-        let error_msg = format!("{}", result.unwrap_err());
+        let error_msg = format!("{err}");
         assert!(!error_msg.is_empty());
     }
 }

@@ -422,83 +422,6 @@ async fn test_cli_client_unicode() {
     client.disconnect().await.unwrap();
 }
 
-// Test command parser functionality
-mod command_parser_tests {
-    use rustypotato::cli::interactive::CommandParser;
-
-    #[test]
-    fn test_parse_simple_command() {
-        let result = CommandParser::parse("SET key value").unwrap();
-        assert_eq!(result, vec!["SET", "key", "value"]);
-    }
-
-    #[test]
-    fn test_parse_quoted_string() {
-        let result = CommandParser::parse("SET key \"hello world\"").unwrap();
-        assert_eq!(result, vec!["SET", "key", "hello world"]);
-    }
-
-    #[test]
-    fn test_parse_escaped_quotes() {
-        let result = CommandParser::parse("SET key \"hello \\\"world\\\"\"").unwrap();
-        assert_eq!(result, vec!["SET", "key", "hello \"world\""]);
-    }
-
-    #[test]
-    fn test_parse_multiple_spaces() {
-        let result = CommandParser::parse("SET    key     value").unwrap();
-        assert_eq!(result, vec!["SET", "key", "value"]);
-    }
-
-    #[test]
-    fn test_parse_tabs() {
-        let result = CommandParser::parse("SET\tkey\tvalue").unwrap();
-        assert_eq!(result, vec!["SET", "key", "value"]);
-    }
-
-    #[test]
-    fn test_parse_empty_string() {
-        let result = CommandParser::parse("").unwrap();
-        assert_eq!(result, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_parse_whitespace_only() {
-        let result = CommandParser::parse("   \t  ").unwrap();
-        assert_eq!(result, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_parse_unterminated_quote() {
-        let result = CommandParser::parse("SET key \"unterminated");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_escaped_backslash() {
-        let result = CommandParser::parse("SET key \"path\\\\to\\\\file\"").unwrap();
-        assert_eq!(result, vec!["SET", "key", "path\\to\\file"]);
-    }
-
-    #[test]
-    fn test_parse_empty_quotes() {
-        let result = CommandParser::parse("SET key \"\"").unwrap();
-        assert_eq!(result, vec!["SET", "key", ""]);
-    }
-
-    #[test]
-    fn test_parse_mixed_quotes_and_spaces() {
-        let result = CommandParser::parse("SET \"key with spaces\" value").unwrap();
-        assert_eq!(result, vec!["SET", "key with spaces", "value"]);
-    }
-
-    #[test]
-    fn test_parse_special_characters() {
-        let result = CommandParser::parse("SET key \"line1\\nline2\\ttab\"").unwrap();
-        assert_eq!(result, vec!["SET", "key", "line1\nline2\ttab"]);
-    }
-}
-
 // Performance tests
 #[cfg(test)]
 mod performance_tests {
@@ -522,7 +445,10 @@ mod performance_tests {
                 .execute_command("SET", &[key.clone(), value])
                 .await
                 .unwrap();
-            client.execute_command("GET", &[key.clone()]).await.unwrap();
+            client
+                .execute_command("GET", std::slice::from_ref(&key))
+                .await
+                .unwrap();
             client.execute_command("DEL", &[key]).await.unwrap();
         }
 

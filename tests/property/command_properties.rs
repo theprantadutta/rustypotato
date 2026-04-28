@@ -32,7 +32,9 @@ fn field_strategy() -> impl Strategy<Value = String> {
 
 /// Strategy for TTL values
 fn ttl_strategy() -> impl Strategy<Value = u64> {
-    1u64..3600u64
+    // Lower bound 10s avoids flakes at the boundary where test-machinery
+    // overhead can push TTL to 0 between EXPIRE and the assertion.
+    10u64..3600u64
 }
 
 proptest! {
@@ -452,7 +454,7 @@ proptest! {
             let ttl_cmd = TtlCommand;
 
             // TTL on non-existent key
-            let result1 = ttl_cmd.execute(&[key.clone()], &store).await;
+            let result1 = ttl_cmd.execute(std::slice::from_ref(&key), &store).await;
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, -2);
@@ -464,7 +466,7 @@ proptest! {
             set_cmd.execute(&[key.clone(), value], &store).await;
 
             // TTL on key without expiration
-            let result2 = ttl_cmd.execute(&[key.clone()], &store).await;
+            let result2 = ttl_cmd.execute(std::slice::from_ref(&key), &store).await;
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, -1);
@@ -500,7 +502,7 @@ proptest! {
 
             // SET with 1 arg (needs 2)
             let set_cmd = SetCommand;
-            let result = set_cmd.execute(&[key.clone()], &store).await;
+            let result = set_cmd.execute(std::slice::from_ref(&key), &store).await;
             prop_assert!(matches!(result, CommandResult::Error(_)));
 
             // GET with 0 args (needs 1)

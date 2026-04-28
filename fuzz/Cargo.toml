@@ -30,13 +30,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "command_execution"
-path = "fuzz_targets/command_execution.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "resp_roundtrip"
 path = "fuzz_targets/resp_roundtrip.rs"
 test = false
