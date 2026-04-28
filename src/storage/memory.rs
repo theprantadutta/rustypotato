@@ -343,24 +343,30 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Get a value from the store
+    /// Get a value from the store.
+    ///
+    /// Uses the read-side `data.get()` rather than `get_mut()`. The
+    /// previous implementation grabbed a write lock on the per-shard
+    /// DashMap entry just so it could call `entry.touch()`, serializing
+    /// concurrent reads of the same shard against each other. That cost
+    /// is real (was the single biggest unforced perf foot-gun in the
+    /// review) and the touch served no purpose: nothing in the store
+    /// reads `last_accessed` yet (LRU eviction lands in stage 10).
+    ///
+    /// When stage 10 wires up LRU, `last_accessed` becomes an
+    /// `AtomicU64` updated lock-free here.
     pub fn get<K>(&self, key: K) -> Result<Option<StoredValue>>
     where
         K: AsRef<str>,
     {
         let key_str = key.as_ref();
 
-        // Check if key exists and is not expired
-        if let Some(mut entry) = self.data.get_mut(key_str) {
+        if let Some(entry) = self.data.get(key_str) {
             if entry.is_expired() {
-                // Remove expired key
-                drop(entry); // Release the lock before removing
+                drop(entry);
                 self.delete_sync(key_str)?;
                 return Ok(None);
             }
-
-            // Update last accessed time
-            entry.touch();
             Ok(Some(entry.clone()))
         } else {
             Ok(None)
@@ -677,17 +683,12 @@ impl MemoryStore {
         let key_str = key.as_ref();
         let field_str = field.as_ref();
 
-        if let Some(mut entry) = self.data.get_mut(key_str) {
+        if let Some(entry) = self.data.get(key_str) {
             if entry.is_expired() {
-                // Remove expired key
                 drop(entry);
                 self.delete_sync(key_str)?;
                 return Ok(None);
             }
-
-            // Update last accessed time
-            entry.touch();
-
             match entry.value.as_hash() {
                 Ok(hash) => Ok(hash.get(field_str).cloned()),
                 Err(_) => Err(RustyPotatoError::StorageError {
@@ -770,17 +771,12 @@ impl MemoryStore {
     {
         let key_str = key.as_ref();
 
-        if let Some(mut entry) = self.data.get_mut(key_str) {
+        if let Some(entry) = self.data.get(key_str) {
             if entry.is_expired() {
-                // Remove expired key
                 drop(entry);
                 self.delete_sync(key_str)?;
                 return Ok(Vec::new());
             }
-
-            // Update last accessed time
-            entry.touch();
-
             match entry.value.as_hash() {
                 Ok(hash) => {
                     let mut result = Vec::new();
@@ -810,17 +806,12 @@ impl MemoryStore {
         let key_str = key.as_ref();
         let field_str = field.as_ref();
 
-        if let Some(mut entry) = self.data.get_mut(key_str) {
+        if let Some(entry) = self.data.get(key_str) {
             if entry.is_expired() {
-                // Remove expired key
                 drop(entry);
                 self.delete_sync(key_str)?;
                 return Ok(false);
             }
-
-            // Update last accessed time
-            entry.touch();
-
             match entry.value.as_hash() {
                 Ok(hash) => Ok(hash.contains_key(field_str)),
                 Err(_) => Err(RustyPotatoError::StorageError {
