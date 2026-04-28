@@ -203,6 +203,14 @@ impl PerformanceMetrics {
     }
 }
 
+/// Maximum number of distinct command names we track in detail. Anything
+/// past this cap aggregates into the `OTHER_BUCKET` key. Bounds the
+/// memory footprint of the metrics maps so a malicious client can't
+/// flood `record_command_latency` with random names and drive
+/// unbounded heap growth.
+const MAX_DISTINCT_COMMANDS: usize = 64;
+const OTHER_BUCKET: &str = "_other_";
+
 /// Command-specific metrics tracking
 #[derive(Debug, Clone)]
 pub struct CommandMetrics {
@@ -226,16 +234,31 @@ impl CommandMetrics {
         }
     }
 
+    /// Map a raw command name to the key we'll record under. New names
+    /// only get a dedicated entry until `MAX_DISTINCT_COMMANDS` is
+    /// reached; subsequent unknowns fold into `OTHER_BUCKET`.
+    fn bucket_key(&self, command: &str) -> String {
+        if self.command_counts.contains_key(command)
+            || self.command_counts.len() < MAX_DISTINCT_COMMANDS
+        {
+            command.to_string()
+        } else {
+            OTHER_BUCKET.to_string()
+        }
+    }
+
     pub fn record_command(&mut self, command: &str, duration: Duration) {
-        *self.command_counts.entry(command.to_string()).or_insert(0) += 1;
+        let key = self.bucket_key(command);
+        *self.command_counts.entry(key.clone()).or_insert(0) += 1;
         self.command_latencies
-            .entry(command.to_string())
+            .entry(key)
             .or_default()
             .record(duration);
     }
 
     pub fn record_command_error(&mut self, command: &str) {
-        *self.command_errors.entry(command.to_string()).or_insert(0) += 1;
+        let key = self.bucket_key(command);
+        *self.command_errors.entry(key).or_insert(0) += 1;
     }
 
     pub fn total_commands(&self) -> u64 {

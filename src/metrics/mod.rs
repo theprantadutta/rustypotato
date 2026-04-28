@@ -47,7 +47,11 @@ impl Histogram {
         }
     }
 
-    /// Record a value in the histogram
+    /// Record a value in the histogram. Each sample is counted into
+    /// exactly one bucket — the smallest bucket whose upper bound is
+    /// ≥ the value. The previous implementation incremented every
+    /// bucket from `value` upward (cumulative counts) which made
+    /// percentile interpolation unreliable.
     pub fn record(&mut self, value: Duration) {
         self.total_count += 1;
         self.total_sum += value;
@@ -55,26 +59,51 @@ impl Histogram {
         for (bucket_limit, count) in &mut self.buckets {
             if value <= *bucket_limit {
                 *count += 1;
+                return;
             }
+        }
+        // Sample exceeds the largest bucket; fold into the last one.
+        if let Some((_, count)) = self.buckets.last_mut() {
+            *count += 1;
         }
     }
 
-    /// Get the percentile value
+    /// Get the percentile value with linear interpolation within the
+    /// containing bucket.
+    ///
+    /// The previous implementation returned the bucket's upper bound as
+    /// soon as the cumulative count crossed the target — that's what
+    /// nanosecond-precision percentile reports were inflated by. With
+    /// the current bucket layout (10μs, 50μs, 100μs, ...), reporting a
+    /// p50 of 100μs when 50% of samples landed at ~25μs is a 4×
+    /// overstatement. Interpolation gives a usable answer.
     pub fn percentile(&self, p: f64) -> Option<Duration> {
         if self.total_count == 0 {
             return None;
         }
 
-        let target_count = (self.total_count as f64 * p / 100.0) as u64;
-        let mut cumulative = 0;
+        let target_count = self.total_count as f64 * p.clamp(0.0, 100.0) / 100.0;
+        let mut cumulative_before: u64 = 0;
+        let mut prev_upper = Duration::ZERO;
 
         for (bucket_limit, count) in &self.buckets {
-            cumulative += count;
-            if cumulative >= target_count {
-                return Some(*bucket_limit);
+            let cumulative_after = cumulative_before + count;
+            if (cumulative_after as f64) >= target_count {
+                if *count == 0 {
+                    return Some(prev_upper);
+                }
+                // Linear interpolation: where in this bucket does the
+                // target percentile fall?
+                let fraction = (target_count - cumulative_before as f64) / (*count as f64);
+                let span = *bucket_limit - prev_upper;
+                let inside = Duration::from_secs_f64(span.as_secs_f64() * fraction.clamp(0.0, 1.0));
+                return Some(prev_upper + inside);
             }
+            cumulative_before = cumulative_after;
+            prev_upper = *bucket_limit;
         }
 
+        // Beyond the last bucket: report the last upper bound.
         self.buckets.last().map(|(limit, _)| *limit)
     }
 

@@ -13,11 +13,19 @@ use tokio::fs;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-/// Log rotation manager
+/// Log rotation manager.
+///
+/// `status` is wrapped in an `Arc` so the background rotation task can
+/// share it with the foreground `get_status()` reader. The previous
+/// implementation owned a non-shared `RwLock<LogRotationStatus>` here
+/// AND the spawned task built its own `Arc<RwLock<...>>` from scratch
+/// (see `start()` below), so all rotation state — last_rotation,
+/// rotated_files_count, errors — was written to an orphan that
+/// `get_status()` never read.
 #[derive(Debug)]
 pub struct LogRotationManager {
     config: LogRotationConfig,
-    status: RwLock<LogRotationStatus>,
+    status: Arc<RwLock<LogRotationStatus>>,
 }
 
 /// Configuration for log rotation
@@ -66,14 +74,14 @@ impl LogRotationManager {
     pub fn new(config: LogRotationConfig) -> Self {
         Self {
             config,
-            status: RwLock::new(LogRotationStatus {
+            status: Arc::new(RwLock::new(LogRotationStatus {
                 last_rotation: None,
                 next_rotation: None,
                 current_file_size: 0,
                 rotated_files_count: 0,
                 total_rotated_size: 0,
                 errors: Vec::new(),
-            }),
+            })),
         }
     }
 
@@ -87,16 +95,11 @@ impl LogRotationManager {
         // Initial status update
         self.update_status().await?;
 
-        // Start background rotation task
+        // Start background rotation task. Crucially we share the same
+        // status Arc as `self.status` so updates are visible via
+        // `get_status()`.
         let config = self.config.clone();
-        let status = Arc::new(RwLock::new(LogRotationStatus {
-            last_rotation: None,
-            next_rotation: None,
-            current_file_size: 0,
-            rotated_files_count: 0,
-            total_rotated_size: 0,
-            errors: Vec::new(),
-        }));
+        let status = Arc::clone(&self.status);
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60)); // Check every minute
