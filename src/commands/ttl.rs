@@ -1,17 +1,35 @@
 //! TTL command implementations (EXPIRE, TTL)
 
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
-use crate::storage::MemoryStore;
+use crate::storage::{ExpireFlag, MemoryStore};
 use async_trait::async_trait;
 
 /// EXPIRE command implementation
-/// Sets a timeout on a key. After the timeout has expired, the key will automatically be deleted.
+///
+/// Supports the full Redis 7 syntax: `EXPIRE key seconds [NX | XX | GT | LT]`.
+/// Flags are mutually exclusive — combining them yields a syntax error.
 pub struct ExpireCommand;
+
+fn parse_expire_flag(args: &[String]) -> std::result::Result<ExpireFlag, String> {
+    if args.is_empty() {
+        return Ok(ExpireFlag::None);
+    }
+    if args.len() > 1 {
+        return Err("ERR syntax error".to_string());
+    }
+    match args[0].to_ascii_uppercase().as_str() {
+        "NX" => Ok(ExpireFlag::Nx),
+        "XX" => Ok(ExpireFlag::Xx),
+        "GT" => Ok(ExpireFlag::Gt),
+        "LT" => Ok(ExpireFlag::Lt),
+        _ => Err("ERR syntax error".to_string()),
+    }
+}
 
 #[async_trait]
 impl Command for ExpireCommand {
     async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
-        if args.len() != 2 {
+        if args.len() < 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'EXPIRE' command".to_string(),
             );
@@ -30,9 +48,14 @@ impl Command for ExpireCommand {
             }
         };
 
-        match store.expire(key, ttl_seconds).await {
-            Ok(true) => CommandResult::Ok(ResponseValue::Integer(1)), // Key exists and expiration was set
-            Ok(false) => CommandResult::Ok(ResponseValue::Integer(0)), // Key doesn't exist
+        let flag = match parse_expire_flag(&args[2..]) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
+
+        match store.expire_with_options(key, ttl_seconds, flag).await {
+            Ok(true) => CommandResult::Ok(ResponseValue::Integer(1)),
+            Ok(false) => CommandResult::Ok(ResponseValue::Integer(0)),
             Err(e) => CommandResult::Error(e.to_client_error()),
         }
     }
@@ -42,7 +65,8 @@ impl Command for ExpireCommand {
     }
 
     fn arity(&self) -> CommandArity {
-        CommandArity::Fixed(3) // EXPIRE key seconds
+        // EXPIRE key seconds [NX|XX|GT|LT]
+        CommandArity::Range(3, 4)
     }
 }
 
@@ -233,7 +257,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_expire_command_wrong_args_too_many() {
+    async fn test_expire_command_unknown_flag() {
+        // With NX/XX/GT/LT flag support a third arg that isn't a
+        // recognized flag now produces `syntax error` instead of
+        // `wrong number of arguments`.
         let store = create_test_store();
         let cmd = ExpireCommand;
         let args = vec!["key".to_string(), "60".to_string(), "extra".to_string()];
@@ -242,9 +269,9 @@ mod tests {
 
         match result {
             CommandResult::Error(msg) => {
-                assert!(msg.contains("wrong number of arguments"));
+                assert!(msg.contains("syntax error"), "got {msg}");
             }
-            _ => panic!("Expected error for wrong number of arguments"),
+            _ => panic!("Expected syntax error for unrecognized flag"),
         }
     }
 
@@ -288,7 +315,169 @@ mod tests {
     fn test_expire_command_properties() {
         let cmd = ExpireCommand;
         assert_eq!(cmd.name(), "EXPIRE");
-        assert_eq!(cmd.arity(), CommandArity::Fixed(3));
+        // Stage 8: arity widened for the optional NX/XX/GT/LT flag.
+        assert_eq!(cmd.arity(), CommandArity::Range(3, 4));
+    }
+
+    // EXPIRE flag tests (Stage 8: NX/XX/GT/LT)
+
+    #[tokio::test]
+    async fn test_expire_nx_no_existing_ttl_applies() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "60".to_string(), "NX".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        assert!(store.ttl("k").unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_expire_nx_existing_ttl_rejected() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "v", 100).await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "60".to_string(), "NX".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        );
+        // Original TTL preserved.
+        assert!(store.ttl("k").unwrap() > 60);
+    }
+
+    #[tokio::test]
+    async fn test_expire_xx_existing_ttl_applies() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "v", 100).await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "30".to_string(), "XX".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl <= 30 && ttl > 0, "ttl {ttl}");
+    }
+
+    #[tokio::test]
+    async fn test_expire_xx_no_existing_ttl_rejected() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "30".to_string(), "XX".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        );
+        // No TTL was applied.
+        assert_eq!(store.ttl("k").unwrap(), -1);
+    }
+
+    #[tokio::test]
+    async fn test_expire_gt_only_applies_if_greater() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "v", 30).await.unwrap();
+
+        let cmd = ExpireCommand;
+        // 10 < 30 → rejected
+        let args = vec!["k".to_string(), "10".to_string(), "GT".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        );
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl > 20, "ttl should be unchanged, got {ttl}");
+
+        // 200 > 30 → applies
+        let args = vec!["k".to_string(), "200".to_string(), "GT".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        assert!(store.ttl("k").unwrap() > 100);
+    }
+
+    #[tokio::test]
+    async fn test_expire_gt_no_existing_ttl_rejected() {
+        // GT with no current TTL: current is treated as +inf, so any
+        // finite new TTL is shorter and the operation is rejected.
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "60".to_string(), "GT".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        );
+        assert_eq!(store.ttl("k").unwrap(), -1);
+    }
+
+    #[tokio::test]
+    async fn test_expire_lt_only_applies_if_less() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "v", 30).await.unwrap();
+
+        let cmd = ExpireCommand;
+        // 100 > 30 → rejected
+        let args = vec!["k".to_string(), "100".to_string(), "LT".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        );
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl <= 30, "ttl should be unchanged, got {ttl}");
+
+        // 5 < 30 → applies
+        let args = vec!["k".to_string(), "5".to_string(), "LT".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl <= 5 && ttl > 0, "ttl {ttl}");
+    }
+
+    #[tokio::test]
+    async fn test_expire_lt_no_existing_ttl_applies() {
+        // LT with no current TTL: current is +inf, so any finite TTL
+        // is less and the operation applies.
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "60".to_string(), "LT".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl > 0 && ttl <= 60, "ttl {ttl}");
+    }
+
+    #[tokio::test]
+    async fn test_expire_unknown_flag_rejected() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "60".to_string(), "FOO".to_string()];
+        match cmd.execute(&args, &store).await {
+            CommandResult::Error(msg) => assert!(msg.contains("syntax error"), "{msg}"),
+            _ => panic!("expected syntax error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_expire_flag_lowercase_accepted() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "v", 100).await.unwrap();
+        let cmd = ExpireCommand;
+        let args = vec!["k".to_string(), "30".to_string(), "xx".to_string()];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
     }
 
     // TTL command tests

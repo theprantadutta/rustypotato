@@ -244,6 +244,25 @@ impl ValueMetadata {
     }
 }
 
+/// Conditional flag for `EXPIRE`/`PEXPIRE`.
+///
+/// Mirrors the Redis 7 `EXPIRE … [NX|XX|GT|LT]` options. `Gt`/`Lt` are
+/// compared against `+inf` when the key has no current TTL, matching
+/// Redis (`GT` rejects, `LT` applies).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExpireFlag {
+    #[default]
+    None,
+    /// `NX`: only set TTL if the key currently has no TTL.
+    Nx,
+    /// `XX`: only set TTL if the key currently has a TTL.
+    Xx,
+    /// `GT`: only set TTL if the new TTL is greater than the current one.
+    Gt,
+    /// `LT`: only set TTL if the new TTL is less than the current one.
+    Lt,
+}
+
 /// Existence constraint for `SET` (Redis NX/XX semantics).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SetExistence {
@@ -597,7 +616,28 @@ impl MemoryStore {
     where
         K: AsRef<str>,
     {
+        self.expire_with_options(key, ttl_seconds, ExpireFlag::None)
+            .await
+    }
+
+    /// Set expiration on a key, conditional on the supplied flag.
+    ///
+    /// Implements the Redis 7 `EXPIRE key seconds [NX|XX|GT|LT]` semantics.
+    /// The check-and-set is performed under a single per-shard write
+    /// lock so that two racing `EXPIRE … GT` calls cannot both apply a
+    /// shorter TTL than the eventual winner.
+    pub async fn expire_with_options<K>(
+        &self,
+        key: K,
+        ttl_seconds: u64,
+        flag: ExpireFlag,
+    ) -> Result<bool>
+    where
+        K: AsRef<str>,
+    {
         let key_str = key.as_ref();
+
+        let new_expires_at = Instant::now() + std::time::Duration::from_secs(ttl_seconds);
 
         if let Some(mut entry) = self.data.get_mut(key_str) {
             if entry.is_expired() {
@@ -607,12 +647,35 @@ impl MemoryStore {
                 return Ok(false);
             }
 
-            let expires_at = Instant::now() + std::time::Duration::from_secs(ttl_seconds);
-            entry.set_expiration(expires_at);
+            let current = entry.expires_at;
+            let should_apply = match flag {
+                ExpireFlag::None => true,
+                ExpireFlag::Nx => current.is_none(),
+                ExpireFlag::Xx => current.is_some(),
+                ExpireFlag::Gt => match current {
+                    Some(c) => new_expires_at > c,
+                    // GT: per Redis, if there's no current TTL the
+                    // existing "value" is +inf, so any new finite TTL
+                    // is shorter and the operation is rejected.
+                    None => false,
+                },
+                ExpireFlag::Lt => match current {
+                    Some(c) => new_expires_at < c,
+                    // LT: no current TTL is treated as +inf, so any new
+                    // finite TTL is shorter and applies.
+                    None => true,
+                },
+            };
+
+            if !should_apply {
+                return Ok(false);
+            }
+
+            entry.set_expiration(new_expires_at);
 
             // Update expiration index
             self.expiration_index
-                .insert(key_str.to_string(), expires_at);
+                .insert(key_str.to_string(), new_expires_at);
 
             Ok(true)
         } else {
