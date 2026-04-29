@@ -67,7 +67,7 @@ pub mod generators {
     }
 
     pub fn test_string_value(prefix: &str, id: usize) -> ValueType {
-        ValueType::String(test_value(prefix, id))
+        ValueType::from(test_value(prefix, id))
     }
 }
 

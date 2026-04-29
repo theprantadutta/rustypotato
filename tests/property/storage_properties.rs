@@ -342,7 +342,7 @@ proptest! {
     /// Property: String ValueType roundtrips correctly
     #[test]
     fn prop_value_type_string_roundtrip(s in value_strategy()) {
-        let value = ValueType::String(s.clone());
+        let value = ValueType::from(s.clone());
         prop_assert_eq!(value.to_string(), s);
         prop_assert!(value.is_string());
         prop_assert!(!value.is_integer());
@@ -360,7 +360,7 @@ proptest! {
     /// Property: Numeric string converts to integer correctly
     #[test]
     fn prop_numeric_string_converts(i in -1000000i64..1000000i64) {
-        let value = ValueType::String(i.to_string());
+        let value = ValueType::from(i.to_string());
         prop_assert_eq!(value.to_integer().unwrap(), i);
     }
 

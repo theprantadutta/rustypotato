@@ -1,29 +1,46 @@
 //! In-memory storage implementation using DashMap
 
 use crate::error::{Result, RustyPotatoError};
+use bytes::Bytes;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::time::Instant;
 
-/// Value types supported by RustyPotato
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Value types supported by RustyPotato.
+///
+/// `String` carries `Bytes` (not `String`) so the store is binary-safe
+/// for value payloads — Redis bulk strings are arbitrary octets, not
+/// guaranteed-UTF-8. Hash field names and keys remain `String` for
+/// now; binary-safe field/key support is a follow-up stage.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ValueType {
-    String(String),
+    String(Bytes),
     Integer(i64),
     Hash(HashMap<String, String>),
     List(VecDeque<String>),
 }
 
 impl ValueType {
-    /// Convert value to string representation
+    /// Convert value to string representation. Non-UTF-8 byte values
+    /// are rendered via `from_utf8_lossy` (replacement-char) — this is
+    /// purely for debug/display surfaces; the wire codec still emits
+    /// the raw bytes.
     pub fn as_string(&self) -> String {
         match self {
-            ValueType::String(s) => s.clone(),
+            ValueType::String(s) => String::from_utf8_lossy(s).into_owned(),
             ValueType::Integer(i) => i.to_string(),
             ValueType::Hash(_) => "(hash)".to_string(),
             ValueType::List(_) => "(list)".to_string(),
+        }
+    }
+
+    /// Get the raw bytes when this is a String value (zero-copy).
+    pub fn as_bytes(&self) -> Option<&Bytes> {
+        match self {
+            ValueType::String(b) => Some(b),
+            _ => None,
         }
     }
 
@@ -31,9 +48,15 @@ impl ValueType {
     pub fn to_integer(&self) -> Result<i64> {
         match self {
             ValueType::Integer(i) => Ok(*i),
-            ValueType::String(s) => s
-                .parse::<i64>()
-                .map_err(|_| RustyPotatoError::NotAnInteger { value: s.clone() }),
+            ValueType::String(s) => {
+                let text = std::str::from_utf8(s).map_err(|_| RustyPotatoError::NotAnInteger {
+                    value: String::from_utf8_lossy(s).into_owned(),
+                })?;
+                text.parse::<i64>()
+                    .map_err(|_| RustyPotatoError::NotAnInteger {
+                        value: text.to_string(),
+                    })
+            }
             ValueType::Hash(_) => Err(RustyPotatoError::NotAnInteger {
                 value: "hash".to_string(),
             }),
@@ -120,22 +143,6 @@ impl ValueType {
             }),
         }
     }
-
-    /// Serialize the value to bytes for persistence
-    pub fn serialize(&self) -> Result<Vec<u8>> {
-        bincode::serialize(self).map_err(|e| RustyPotatoError::SerializationError {
-            message: format!("Failed to serialize value: {}", e),
-            source: Some(Box::new(e)),
-        })
-    }
-
-    /// Deserialize value from bytes
-    pub fn deserialize(data: &[u8]) -> Result<Self> {
-        bincode::deserialize(data).map_err(|e| RustyPotatoError::SerializationError {
-            message: format!("Failed to deserialize value: {}", e),
-            source: Some(Box::new(e)),
-        })
-    }
 }
 
 impl fmt::Display for ValueType {
@@ -146,13 +153,25 @@ impl fmt::Display for ValueType {
 
 impl From<String> for ValueType {
     fn from(s: String) -> Self {
-        ValueType::String(s)
+        ValueType::String(Bytes::from(s))
     }
 }
 
 impl From<&str> for ValueType {
     fn from(s: &str) -> Self {
-        ValueType::String(s.to_string())
+        ValueType::String(Bytes::copy_from_slice(s.as_bytes()))
+    }
+}
+
+impl From<Bytes> for ValueType {
+    fn from(b: Bytes) -> Self {
+        ValueType::String(b)
+    }
+}
+
+impl From<Vec<u8>> for ValueType {
+    fn from(v: Vec<u8>) -> Self {
+        ValueType::String(Bytes::from(v))
     }
 }
 
@@ -1224,7 +1243,7 @@ mod tests {
     // Value type tests
     #[test]
     fn test_value_type_string_creation() {
-        let value = ValueType::String("hello".to_string());
+        let value = ValueType::from("hello".to_string());
         assert!(value.is_string());
         assert!(!value.is_integer());
         assert_eq!(value.as_string(), "hello");
@@ -1243,10 +1262,10 @@ mod tests {
     #[test]
     fn test_value_type_conversions() {
         // String to integer conversion
-        let string_value = ValueType::String("123".to_string());
+        let string_value = ValueType::from("123".to_string());
         assert_eq!(string_value.to_integer().unwrap(), 123);
 
-        let invalid_string = ValueType::String("not_a_number".to_string());
+        let invalid_string = ValueType::from("not_a_number".to_string());
         assert!(invalid_string.to_integer().is_err());
 
         // Integer to string conversion
@@ -1440,10 +1459,10 @@ mod tests {
     #[test]
     fn test_value_type_from_conversions() {
         let from_string: ValueType = "test".into();
-        assert_eq!(from_string, ValueType::String("test".to_string()));
+        assert_eq!(from_string, ValueType::from("test".to_string()));
 
         let from_string_owned: ValueType = "test".to_string().into();
-        assert_eq!(from_string_owned, ValueType::String("test".to_string()));
+        assert_eq!(from_string_owned, ValueType::from("test".to_string()));
 
         let from_i64: ValueType = 42i64.into();
         assert_eq!(from_i64, ValueType::Integer(42));
@@ -1454,7 +1473,7 @@ mod tests {
 
     #[test]
     fn test_value_type_display() {
-        let string_value = ValueType::String("hello".to_string());
+        let string_value = ValueType::from("hello".to_string());
         assert_eq!(format!("{string_value}"), "hello");
 
         let int_value = ValueType::Integer(42);
@@ -1464,7 +1483,7 @@ mod tests {
     // StoredValue tests
     #[test]
     fn test_stored_value_creation() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let stored = StoredValue::new(value.clone());
 
         assert_eq!(stored.value, value);
@@ -1480,7 +1499,7 @@ mod tests {
 
     #[test]
     fn test_stored_value_with_expiration() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let expires_at = Instant::now() + Duration::from_secs(60);
         let stored = StoredValue::new_with_expiration(value.clone(), expires_at);
 
@@ -1491,7 +1510,7 @@ mod tests {
 
     #[test]
     fn test_stored_value_with_ttl() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let stored = StoredValue::new_with_ttl(value.clone(), 60);
 
         assert_eq!(stored.value, value);
@@ -1505,7 +1524,7 @@ mod tests {
 
     #[test]
     fn test_stored_value_expiration() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let expires_at = Instant::now() - Duration::from_secs(1); // Already expired
         let stored = StoredValue::new_with_expiration(value, expires_at);
 
@@ -1515,7 +1534,7 @@ mod tests {
 
     #[test]
     fn test_stored_value_touch() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let mut stored = StoredValue::new(value);
         let original_access_time = stored.last_accessed;
 
@@ -2012,7 +2031,7 @@ mod tests {
     #[test]
     fn test_value_type_edge_cases() {
         // Test empty string
-        let empty_string = ValueType::String("".to_string());
+        let empty_string = ValueType::from("".to_string());
         assert_eq!(empty_string.to_string(), "");
         assert!(empty_string.to_integer().is_err());
 
@@ -2027,13 +2046,13 @@ mod tests {
         assert_eq!(negative_int.to_integer().unwrap(), -42);
 
         // Test string with negative number
-        let negative_string = ValueType::String("-123".to_string());
+        let negative_string = ValueType::from("-123".to_string());
         assert_eq!(negative_string.to_integer().unwrap(), -123);
     }
 
     #[test]
     fn test_stored_value_metadata_consistency() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let stored = StoredValue::new(value);
 
         // created_at should be <= last_accessed (they're set to the same time)

@@ -23,7 +23,7 @@ fn bench_memory_store(c: &mut Criterion) {
         let store = Arc::clone(&store);
         b.to_async(&rt).iter(|| async {
             let key = format!("key_{}", fastrand::u64(..));
-            let value = ValueType::String(format!("value_{}", fastrand::u64(..)));
+            let value = ValueType::from(format!("value_{}", fastrand::u64(..)));
             store.set(black_box(key), black_box(value)).await.unwrap();
         });
     });
@@ -35,7 +35,7 @@ fn bench_memory_store(c: &mut Criterion) {
         rt.block_on(async {
             for i in 0..1000 {
                 let key = format!("bench_key_{i}");
-                let value = ValueType::String(format!("bench_value_{i}"));
+                let value = ValueType::from(format!("bench_value_{i}"));
                 store.set(key, value).await.unwrap();
             }
         });
@@ -61,7 +61,7 @@ fn bench_memory_store(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             // Setup and execute in the same async block
             let key = format!("delete_key_{}", fastrand::u64(..));
-            let value = ValueType::String("delete_value".to_string());
+            let value = ValueType::from("delete_value".to_string());
             store.set(key.clone(), value).await.unwrap();
             store.delete(black_box(&key)).await.unwrap();
         });
@@ -78,7 +78,7 @@ fn bench_memory_store(c: &mut Criterion) {
                         0 => {
                             // SET operation
                             let key = format!("concurrent_key_{}", fastrand::u64(..));
-                            let value = ValueType::String(format!("value_{}", fastrand::u64(..)));
+                            let value = ValueType::from(format!("value_{}", fastrand::u64(..)));
                             store.set(key, value).await.unwrap();
                         }
                         1 => {
@@ -168,7 +168,7 @@ fn bench_ttl_operations(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             // Setup and execute in the same async block
             let key = format!("expire_key_{}", fastrand::u64(..));
-            let value = ValueType::String("expire_value".to_string());
+            let value = ValueType::from("expire_value".to_string());
             store.set(key.clone(), value).await.unwrap();
             store.expire(black_box(&key), 60).await.unwrap();
         });
@@ -181,7 +181,7 @@ fn bench_ttl_operations(c: &mut Criterion) {
         rt.block_on(async {
             for i in 0..1000 {
                 let key = format!("ttl_key_{i}");
-                let value = ValueType::String(format!("ttl_value_{i}"));
+                let value = ValueType::from(format!("ttl_value_{i}"));
                 store.set(key.clone(), value).await.unwrap();
                 store.expire(&key, 3600).await.unwrap();
             }
@@ -335,7 +335,7 @@ fn bench_scalability(c: &mut Criterion) {
                     // Pre-populate with keys
                     for i in 0..key_count {
                         let key = format!("scale_key_{i}");
-                        let value = ValueType::String(format!("scale_value_{i}"));
+                        let value = ValueType::from(format!("scale_value_{i}"));
                         store.set(key, value).await.unwrap();
                     }
 

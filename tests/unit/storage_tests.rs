@@ -14,7 +14,7 @@ mod value_type_tests {
 
     #[test]
     fn test_value_type_string_operations() {
-        let value = ValueType::String("hello world".to_string());
+        let value = ValueType::from("hello world".to_string());
         
         assert!(value.is_string());
         assert!(!value.is_integer());
@@ -74,11 +74,11 @@ mod value_type_tests {
     fn test_value_type_from_conversions() {
         // From &str
         let from_str: ValueType = "test".into();
-        assert_eq!(from_str, ValueType::String("test".to_string()));
+        assert_eq!(from_str, ValueType::from("test".to_string()));
 
         // From String
         let from_string: ValueType = "test".to_string().into();
-        assert_eq!(from_string, ValueType::String("test".to_string()));
+        assert_eq!(from_string, ValueType::from("test".to_string()));
 
         // From i64
         let from_i64: ValueType = 42i64.into();
@@ -92,7 +92,7 @@ mod value_type_tests {
     #[test]
     fn test_value_type_edge_cases() {
         // Empty string
-        let empty = ValueType::String("".to_string());
+        let empty = ValueType::from("".to_string());
         assert_eq!(empty.to_string(), "");
         assert!(empty.to_integer().is_err());
 
@@ -121,7 +121,7 @@ mod stored_value_tests {
 
     #[test]
     fn test_stored_value_creation() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let stored = StoredValue::new(value.clone());
 
         assert_eq!(stored.value, value);
@@ -137,7 +137,7 @@ mod stored_value_tests {
 
     #[test]
     fn test_stored_value_with_expiration() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let expires_at = Instant::now() + Duration::from_secs(60);
         let stored = StoredValue::new_with_expiration(value.clone(), expires_at);
 
@@ -151,7 +151,7 @@ mod stored_value_tests {
 
     #[test]
     fn test_stored_value_with_ttl() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let stored = StoredValue::new_with_ttl(value.clone(), 60);
 
         assert_eq!(stored.value, value);
@@ -164,7 +164,7 @@ mod stored_value_tests {
 
     #[test]
     fn test_stored_value_expiration() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let expires_at = Instant::now() - Duration::from_secs(1);
         let stored = StoredValue::new_with_expiration(value, expires_at);
 
@@ -174,7 +174,7 @@ mod stored_value_tests {
 
     #[test]
     fn test_stored_value_touch() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let mut stored = StoredValue::new(value);
         let original_access_time = stored.last_accessed;
 
@@ -186,7 +186,7 @@ mod stored_value_tests {
 
     #[test]
     fn test_stored_value_expiration_management() {
-        let value = ValueType::String("test".to_string());
+        let value = ValueType::from("test".to_string());
         let mut stored = StoredValue::new(value);
 
         // Initially no expiration
