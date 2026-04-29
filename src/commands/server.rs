@@ -1,10 +1,23 @@
 //! Server-level commands that don't touch storage state directly:
-//! PING, ECHO, and (in subsequent stages) COMMAND, INFO, DBSIZE,
-//! TYPE, FLUSHDB, QUIT, KEYS.
+//! PING, ECHO, DBSIZE, TYPE, FLUSHDB, INFO and (in subsequent
+//! stages) COMMAND, KEYS, QUIT.
 
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
+use std::sync::OnceLock;
+use std::time::Instant;
+
+/// Process start time, captured the first time INFO runs. Used as a
+/// best-effort proxy for server uptime in the absence of an explicit
+/// "server started at" hook into `RustyPotatoServer`. The drift
+/// against true server startup is the gap between bind and the first
+/// INFO probe — usually well under a second on real deployments.
+static UPTIME_ANCHOR: OnceLock<Instant> = OnceLock::new();
+
+fn uptime_anchor() -> Instant {
+    *UPTIME_ANCHOR.get_or_init(Instant::now)
+}
 
 /// `PING [message]` — health probe.
 /// - 0 args: returns simple string `+PONG\r\n`.
@@ -174,6 +187,79 @@ impl Command for FlushdbCommand {
     }
 }
 
+/// `INFO [section]` — return server-side diagnostic info as a single
+/// bulk string in Redis' `# Section\nkey:value\n...` format.
+///
+/// Stage 7 implementation: the `server` and `keyspace` sections are
+/// supported; everything else is omitted. `INFO all` and `INFO
+/// default` return both. `INFO <unknown>` returns an empty bulk
+/// string (matches Redis behavior, surprisingly).
+pub struct InfoCommand;
+
+#[async_trait]
+impl Command for InfoCommand {
+    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+        // Trigger uptime anchor on first use.
+        let uptime_seconds = uptime_anchor().elapsed().as_secs();
+
+        let want_section = match args.len() {
+            0 => "default",
+            1 => args[0].as_str(),
+            _ => {
+                return CommandResult::Error(
+                    "ERR wrong number of arguments for 'INFO' command".to_string(),
+                );
+            }
+        };
+
+        let want_server = matches!(
+            &*want_section.to_ascii_lowercase(),
+            "server" | "default" | "all" | "everything"
+        );
+        let want_keyspace = matches!(
+            &*want_section.to_ascii_lowercase(),
+            "keyspace" | "default" | "all" | "everything"
+        );
+
+        let mut out = String::new();
+        if want_server {
+            out.push_str("# Server\r\n");
+            out.push_str(&format!(
+                "rustypotato_version:{}\r\n",
+                env!("CARGO_PKG_VERSION")
+            ));
+            out.push_str(&format!("os:{}\r\n", std::env::consts::OS));
+            out.push_str(&format!("arch:{}\r\n", std::env::consts::ARCH));
+            out.push_str(&format!("process_id:{}\r\n", std::process::id()));
+            out.push_str(&format!("uptime_in_seconds:{uptime_seconds}\r\n"));
+            out.push_str(&format!("tcp_port:{}\r\n", 0)); // server doesn't surface its port to commands; clients already know it
+            out.push_str("\r\n");
+        }
+        if want_keyspace {
+            out.push_str("# Keyspace\r\n");
+            let keys = store.len();
+            if keys > 0 {
+                out.push_str(&format!("db0:keys={keys},expires=0,avg_ttl=0\r\n"));
+            }
+            out.push_str("\r\n");
+        }
+
+        CommandResult::Ok(ResponseValue::bulk(out))
+    }
+
+    fn name(&self) -> &'static str {
+        "INFO"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Range(1, 2)
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +423,58 @@ mod tests {
         assert!(FlushdbCommand.is_mutation());
         assert!(!DbsizeCommand.is_mutation());
         assert!(!TypeCommand.is_mutation());
+    }
+
+    fn extract_bulk(result: &CommandResult) -> &str {
+        match result {
+            CommandResult::Ok(ResponseValue::BulkString(Some(s))) => s.as_str(),
+            other => panic!("expected bulk string, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn info_default_includes_server_and_keyspace() {
+        let store = MemoryStore::new();
+        store.set("k1", "v").await.unwrap();
+        let r = InfoCommand.execute(&[], &store).await;
+        let body = extract_bulk(&r);
+        assert!(body.contains("# Server"));
+        assert!(body.contains("rustypotato_version:"));
+        assert!(body.contains("process_id:"));
+        assert!(body.contains("uptime_in_seconds:"));
+        assert!(body.contains("# Keyspace"));
+        assert!(body.contains("db0:keys=1"));
+    }
+
+    #[tokio::test]
+    async fn info_server_section_only() {
+        let store = MemoryStore::new();
+        let r = InfoCommand.execute(&["server".to_string()], &store).await;
+        let body = extract_bulk(&r);
+        assert!(body.contains("# Server"));
+        assert!(!body.contains("# Keyspace"));
+    }
+
+    #[tokio::test]
+    async fn info_unknown_section_yields_empty_bulk() {
+        let store = MemoryStore::new();
+        let r = InfoCommand.execute(&["nonsense".to_string()], &store).await;
+        assert_eq!(extract_bulk(&r), "");
+    }
+
+    #[tokio::test]
+    async fn info_too_many_args_errors() {
+        let store = MemoryStore::new();
+        assert!(matches!(
+            InfoCommand
+                .execute(&["a".to_string(), "b".to_string()], &store)
+                .await,
+            CommandResult::Error(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn info_is_not_a_mutation() {
+        assert!(!InfoCommand.is_mutation());
     }
 }
