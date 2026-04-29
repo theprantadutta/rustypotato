@@ -144,14 +144,15 @@ proptest! {
                 set_cmd.execute(&args, &store).await;
             }
 
-            // Check EXISTS
+            // Check EXISTS. Redis semantics: EXISTS counts each
+            // occurrence of an existing key as 1 — so `EXISTS k k`
+            // on an existing k returns 2. The previous assertion
+            // bounded count by the unique-key set size, which is
+            // wrong; the correct upper bound is the total arg count.
             let result = exists_cmd.execute(&existing_keys, &store).await;
-
-            let unique_keys: std::collections::HashSet<_> = existing_keys.iter().collect();
-
             match result {
                 CommandResult::Ok(ResponseValue::Integer(count)) => {
-                    prop_assert!(count <= unique_keys.len() as i64);
+                    prop_assert!(count <= existing_keys.len() as i64);
                     prop_assert!(count >= 0);
                 }
                 _ => prop_assert!(false, "EXISTS should return integer count"),

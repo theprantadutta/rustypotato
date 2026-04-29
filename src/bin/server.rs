@@ -451,9 +451,26 @@ fn display_startup_info(config: &Config) {
     info!("");
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line arguments
+/// Construct a tokio runtime, honoring `config.server.worker_threads`
+/// when set. Without this, the previous `#[tokio::main]` attribute used
+/// the default multi-thread runtime and silently ignored the config
+/// value — operators saw "Worker Threads: 8" in the startup banner
+/// while the runtime actually had `std::thread::available_parallelism()`
+/// workers. Now the value takes effect.
+fn build_runtime(config: &Config) -> std::io::Result<tokio::runtime::Runtime> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(n) = config.server.worker_threads {
+        if n > 0 {
+            builder.worker_threads(n);
+        }
+    }
+    builder.build()
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse command line arguments — this is sync work and shouldn't
+    // need a runtime.
     let args = parse_args();
 
     // Handle version flag
@@ -482,6 +499,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Apply CLI overrides to configuration
     let config = apply_cli_overrides(config, &args);
 
+    // Build the runtime BEFORE initializing tracing, so any early
+    // tracing output emitted during async setup uses the configured
+    // worker thread count consistently.
+    let runtime = build_runtime(&config)?;
+    runtime.block_on(async_main(config))
+}
+
+async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging with configuration
     init_logging(&config)?;
 
