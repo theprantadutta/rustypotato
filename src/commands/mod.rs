@@ -7,6 +7,7 @@
 pub mod atomic;
 pub mod hash;
 pub mod registry;
+pub mod server;
 pub mod string;
 pub mod ttl;
 
@@ -16,6 +17,7 @@ mod integration_tests;
 pub use atomic::{DecrCommand, IncrCommand};
 pub use hash::{HdelCommand, HexistsCommand, HgetCommand, HgetallCommand, HsetCommand};
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
+pub use server::{EchoCommand, PingCommand};
 pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};
 
