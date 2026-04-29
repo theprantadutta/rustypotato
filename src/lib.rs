@@ -36,7 +36,8 @@ use crate::network::ConnectionPool;
 use commands::{
     DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand, ExpireCommand,
     FlushdbCommand, GetCommand, HdelCommand, HexistsCommand, HgetCommand, HgetallCommand,
-    HsetCommand, IncrCommand, InfoCommand, PingCommand, SetCommand, TtlCommand, TypeCommand,
+    HsetCommand, IncrCommand, InfoCommand, KeysCommand, PingCommand, SetCommand, TtlCommand,
+    TypeCommand,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -116,6 +117,7 @@ impl RustyPotatoServer {
         command_registry.register(Box::new(TypeCommand));
         command_registry.register(Box::new(FlushdbCommand));
         command_registry.register(Box::new(InfoCommand));
+        command_registry.register(Box::new(KeysCommand));
 
         let command_registry = Arc::new(command_registry);
 
@@ -362,7 +364,7 @@ mod tests {
         let stats = server.stats().await;
 
         // 13 storage commands + PING + ECHO = 15
-        assert_eq!(stats.registered_commands, 19);
+        assert_eq!(stats.registered_commands, 20);
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -377,7 +379,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 19);
+        assert_eq!(server.command_registry().command_count(), 20);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));

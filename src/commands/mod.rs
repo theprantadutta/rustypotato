@@ -18,7 +18,7 @@ pub use atomic::{DecrCommand, IncrCommand};
 pub use hash::{HdelCommand, HexistsCommand, HgetCommand, HgetallCommand, HsetCommand};
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use server::{
-    DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand, PingCommand, TypeCommand,
+    DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand, KeysCommand, PingCommand, TypeCommand,
 };
 pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};

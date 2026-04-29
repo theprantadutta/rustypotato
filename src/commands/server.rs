@@ -260,6 +260,153 @@ impl Command for InfoCommand {
     }
 }
 
+/// `KEYS pattern` — return all keys matching a glob pattern.
+///
+/// Supported metacharacters (subset of Redis' glob, sufficient for the
+/// common `*`, `prefix:*`, `user:?:profile` patterns):
+///   `*`         — match any (possibly empty) sequence of characters
+///   `?`         — match exactly one character
+///   `[abc]`     — match one of the listed characters
+///   `[^abc]`    — match any character NOT in the list
+///   `[a-z]`     — match a character in the range
+///   `\<c>`      — escape the next character (treat `*?[\` as literal)
+///
+/// O(N) where N = total keys. Documented as such — same caveat Redis
+/// gives. Suitable for admin / dev workflows; production code should
+/// prefer SCAN once we add it.
+pub struct KeysCommand;
+
+#[async_trait]
+impl Command for KeysCommand {
+    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+        if args.len() != 1 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'KEYS' command".to_string(),
+            );
+        }
+        let pattern = &args[0];
+        let matches: Vec<ResponseValue> = store
+            .keys()
+            .into_iter()
+            .filter(|k| glob_match(pattern, k))
+            .map(ResponseValue::bulk)
+            .collect();
+        CommandResult::Ok(ResponseValue::Array(matches))
+    }
+
+    fn name(&self) -> &'static str {
+        "KEYS"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(2) // KEYS pattern
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
+/// Match `text` against a Redis-style glob `pattern`. Recursive
+/// implementation; the recursion only descends on `*`, so worst case
+/// is O(len(pattern) * len(text)) for adversarial patterns — fine for
+/// the keyspaces this server is sized for.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    glob_match_bytes(pattern.as_bytes(), text.as_bytes())
+}
+
+fn glob_match_bytes(p: &[u8], t: &[u8]) -> bool {
+    let (mut pi, mut ti) = (0usize, 0usize);
+    // Backtrack indices for the most recent `*`.
+    let (mut star_p, mut star_t): (Option<usize>, usize) = (None, 0);
+    while ti < t.len() {
+        if pi < p.len() {
+            match p[pi] {
+                b'\\' if pi + 1 < p.len() => {
+                    if p[pi + 1] == t[ti] {
+                        pi += 2;
+                        ti += 1;
+                        continue;
+                    }
+                }
+                b'?' => {
+                    pi += 1;
+                    ti += 1;
+                    continue;
+                }
+                b'*' => {
+                    star_p = Some(pi);
+                    star_t = ti;
+                    pi += 1;
+                    continue;
+                }
+                b'[' => {
+                    if let Some((advance, ok)) = match_class(&p[pi..], t[ti]) {
+                        if ok {
+                            pi += advance;
+                            ti += 1;
+                            continue;
+                        }
+                    }
+                }
+                c if c == t[ti] => {
+                    pi += 1;
+                    ti += 1;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        // No match at this position — backtrack to the last `*` if any.
+        if let Some(sp) = star_p {
+            pi = sp + 1;
+            star_t += 1;
+            ti = star_t;
+        } else {
+            return false;
+        }
+    }
+    // Consume any remaining `*`s in the pattern.
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// Parse a `[...]` character class starting at `p[0]`. Returns the
+/// number of bytes consumed (including the closing `]`) and whether
+/// `c` matches. Returns None if the class is malformed (no closing
+/// bracket).
+fn match_class(p: &[u8], c: u8) -> Option<(usize, bool)> {
+    debug_assert_eq!(p[0], b'[');
+    let mut i = 1usize;
+    let mut negate = false;
+    if i < p.len() && p[i] == b'^' {
+        negate = true;
+        i += 1;
+    }
+    let mut matched = false;
+    while i < p.len() && p[i] != b']' {
+        // Range a-z
+        if i + 2 < p.len() && p[i + 1] == b'-' && p[i + 2] != b']' {
+            if p[i] <= c && c <= p[i + 2] {
+                matched = true;
+            }
+            i += 3;
+        } else {
+            if p[i] == c {
+                matched = true;
+            }
+            i += 1;
+        }
+    }
+    if i >= p.len() {
+        return None;
+    }
+    // Consume closing ']'
+    Some((i + 1, matched ^ negate))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +623,109 @@ mod tests {
     #[tokio::test]
     async fn info_is_not_a_mutation() {
         assert!(!InfoCommand.is_mutation());
+    }
+
+    #[test]
+    fn glob_match_basics() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("*", ""));
+        assert!(glob_match("foo", "foo"));
+        assert!(!glob_match("foo", "bar"));
+        assert!(glob_match("foo*", "foobar"));
+        assert!(glob_match("*bar", "foobar"));
+        assert!(glob_match("f*o*r", "foobar"));
+        assert!(!glob_match("f*o*r", "foobaz"));
+    }
+
+    #[test]
+    fn glob_match_question_mark() {
+        assert!(glob_match("?oo", "foo"));
+        assert!(!glob_match("?oo", "fooz"));
+        assert!(!glob_match("?", ""));
+        assert!(glob_match("user:?:profile", "user:1:profile"));
+        assert!(!glob_match("user:?:profile", "user:11:profile"));
+    }
+
+    #[test]
+    fn glob_match_character_class() {
+        assert!(glob_match("[abc]oo", "boo"));
+        assert!(!glob_match("[abc]oo", "doo"));
+        assert!(glob_match("[^abc]oo", "doo"));
+        assert!(!glob_match("[^abc]oo", "boo"));
+        assert!(glob_match("[a-z]oo", "moo"));
+        assert!(!glob_match("[a-z]oo", "Moo"));
+        assert!(glob_match("[a-c1-3]", "2"));
+    }
+
+    #[test]
+    fn glob_match_escapes() {
+        assert!(glob_match("\\*foo", "*foo"));
+        assert!(!glob_match("\\*foo", "Xfoo"));
+        assert!(glob_match("\\?", "?"));
+    }
+
+    #[tokio::test]
+    async fn keys_returns_array_of_matches() {
+        let store = MemoryStore::new();
+        store.set("user:1", "a").await.unwrap();
+        store.set("user:2", "b").await.unwrap();
+        store.set("session:1", "c").await.unwrap();
+        let r = KeysCommand.execute(&["user:*".to_string()], &store).await;
+        match r {
+            CommandResult::Ok(ResponseValue::Array(items)) => {
+                assert_eq!(items.len(), 2);
+                let strs: Vec<String> = items
+                    .into_iter()
+                    .map(|v| match v {
+                        ResponseValue::BulkString(Some(s)) => s,
+                        _ => panic!(),
+                    })
+                    .collect();
+                assert!(strs.contains(&"user:1".to_string()));
+                assert!(strs.contains(&"user:2".to_string()));
+            }
+            _ => panic!("expected array"),
+        }
+    }
+
+    #[tokio::test]
+    async fn keys_returns_all_for_star() {
+        let store = MemoryStore::new();
+        store.set("a", "1").await.unwrap();
+        store.set("b", "2").await.unwrap();
+        let r = KeysCommand.execute(&["*".to_string()], &store).await;
+        if let CommandResult::Ok(ResponseValue::Array(items)) = r {
+            assert_eq!(items.len(), 2);
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[tokio::test]
+    async fn keys_empty_when_no_match() {
+        let store = MemoryStore::new();
+        store.set("a", "1").await.unwrap();
+        let r = KeysCommand.execute(&["nope:*".to_string()], &store).await;
+        assert_eq!(r, CommandResult::Ok(ResponseValue::Array(vec![])));
+    }
+
+    #[tokio::test]
+    async fn keys_wrong_arity_errors() {
+        let store = MemoryStore::new();
+        assert!(matches!(
+            KeysCommand.execute(&[], &store).await,
+            CommandResult::Error(_)
+        ));
+        assert!(matches!(
+            KeysCommand
+                .execute(&["a".to_string(), "b".to_string()], &store)
+                .await,
+            CommandResult::Error(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn keys_is_not_a_mutation() {
+        assert!(!KeysCommand.is_mutation());
     }
 }
