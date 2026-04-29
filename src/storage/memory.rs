@@ -580,11 +580,9 @@ impl MemoryStore {
                 } else {
                     // Try to convert existing value to integer and increment
                     let current_value = entry.get().value.to_integer()?;
-                    let new_value = current_value.checked_add(increment).ok_or(
-                        RustyPotatoError::NotAnInteger {
-                            value: format!("overflow adding {increment} to {current_value}"),
-                        },
-                    )?;
+                    let new_value = current_value
+                        .checked_add(increment)
+                        .ok_or(RustyPotatoError::IntegerOverflow)?;
 
                     // Update the value in place
                     let mut stored_value = entry.get().clone();

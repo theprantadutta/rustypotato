@@ -138,7 +138,7 @@ impl CommandRegistry {
                 // Execute the command
                 command.execute(&cmd.args, store).await
             }
-            None => CommandResult::Error(format!("ERR unknown command '{}'", cmd.name)),
+            None => CommandResult::Error(format_unknown_command(&cmd.name, &cmd.args)),
         }
     }
 
@@ -178,6 +178,50 @@ impl Default for CommandRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Format the unknown-command error in the shape Redis uses, including
+/// the leading args (single-quoted, comma-separated, truncated after
+/// `MAX_REPORTED_ARGS`). Real clients use this trailing context to
+/// surface diagnostic info — matching the format makes those clients
+/// "just work".
+fn format_unknown_command(name: &str, args: &[String]) -> String {
+    const MAX_REPORTED_ARGS: usize = 5;
+    if args.is_empty() {
+        return format!("ERR unknown command '{name}', with args beginning with: ");
+    }
+    let mut quoted: Vec<String> = args
+        .iter()
+        .take(MAX_REPORTED_ARGS)
+        .map(|a| format!("'{a}'"))
+        .collect();
+    if args.len() > MAX_REPORTED_ARGS {
+        quoted.push("...".to_string());
+    }
+    format!(
+        "ERR unknown command '{name}', with args beginning with: {}",
+        quoted.join(", ")
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn unknown_command_message_matches_redis_format() {
+    assert_eq!(
+        format_unknown_command("FOOBAR", &[]),
+        "ERR unknown command 'FOOBAR', with args beginning with: "
+    );
+    assert_eq!(
+        format_unknown_command("FOOBAR", &["a".into(), "b".into()]),
+        "ERR unknown command 'FOOBAR', with args beginning with: 'a', 'b'"
+    );
+    let many: Vec<String> = (0..7).map(|i| format!("arg{i}")).collect();
+    let msg = format_unknown_command("X", &many);
+    assert!(msg.starts_with("ERR unknown command 'X', with args beginning with:"));
+    assert!(msg.contains("'arg0'"));
+    assert!(msg.contains("'arg4'"));
+    assert!(msg.contains("..."));
+    assert!(!msg.contains("'arg5'"));
 }
 
 #[cfg(test)]

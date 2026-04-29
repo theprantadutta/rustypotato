@@ -59,6 +59,14 @@ pub enum RustyPotatoError {
     #[error("Value is not an integer or out of range: {value}")]
     NotAnInteger { value: String },
 
+    /// INCR/DECR/INCRBY/DECRBY overflow — distinct from `NotAnInteger`
+    /// because Redis clients pattern-match the exact error message
+    /// (`ERR increment or decrement would overflow`) to surface this
+    /// case to users. Conflating it with the generic non-integer error
+    /// breaks client-side handling.
+    #[error("increment or decrement would overflow")]
+    IntegerOverflow,
+
     #[error("Key not found: {key}")]
     KeyNotFound { key: String },
 
@@ -164,6 +172,7 @@ impl RustyPotatoError {
             RustyPotatoError::InvalidCommand { .. }
             | RustyPotatoError::WrongArity { .. }
             | RustyPotatoError::NotAnInteger { .. }
+            | RustyPotatoError::IntegerOverflow
             | RustyPotatoError::KeyNotFound { .. }
             | RustyPotatoError::AuthenticationError { .. }
             | RustyPotatoError::AuthorizationError { .. } => ErrorSeverity::Low,
@@ -189,6 +198,7 @@ impl RustyPotatoError {
             RustyPotatoError::InvalidCommand { .. }
             | RustyPotatoError::WrongArity { .. }
             | RustyPotatoError::NotAnInteger { .. }
+            | RustyPotatoError::IntegerOverflow
             | RustyPotatoError::KeyNotFound { .. }
             | RustyPotatoError::AuthenticationError { .. }
             | RustyPotatoError::AuthorizationError { .. } => ErrorCategory::Client,
@@ -241,6 +251,10 @@ impl RustyPotatoError {
             }
             RustyPotatoError::NotAnInteger { value } => {
                 format!("ERR value is not an integer or out of range: {value}")
+            }
+            RustyPotatoError::IntegerOverflow => {
+                // Exact wording Redis uses; clients pattern-match this.
+                "ERR increment or decrement would overflow".to_string()
             }
             RustyPotatoError::KeyNotFound { key } => {
                 format!("ERR no such key: {key}")

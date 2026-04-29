@@ -369,14 +369,15 @@ mod tests {
         let store = MemoryStore::new();
         let cmd = IncrCommand;
 
-        // Set value near i64::MAX
+        // Set value at i64::MAX
         store.set("overflow_key", i64::MAX).await.unwrap();
 
         let result = cmd.execute(&["overflow_key".to_string()], &store).await;
 
         match result {
             CommandResult::Error(msg) => {
-                assert!(msg.contains("value is not an integer"));
+                // Real-Redis-canonical wording so clients can pattern-match.
+                assert_eq!(msg, "ERR increment or decrement would overflow");
             }
             _ => panic!("Expected error for integer overflow"),
         }
@@ -394,7 +395,7 @@ mod tests {
 
         match result {
             CommandResult::Error(msg) => {
-                assert!(msg.contains("value is not an integer"));
+                assert_eq!(msg, "ERR increment or decrement would overflow");
             }
             _ => panic!("Expected error for integer underflow"),
         }
