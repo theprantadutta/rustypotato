@@ -176,9 +176,7 @@ impl CliClient {
     fn convert_resp_to_response(resp_value: crate::network::protocol::RespValue) -> ResponseValue {
         match resp_value {
             crate::network::protocol::RespValue::SimpleString(s) => ResponseValue::SimpleString(s),
-            crate::network::protocol::RespValue::BulkString(s) => {
-                ResponseValue::BulkString(s.map(bytes::Bytes::from))
-            }
+            crate::network::protocol::RespValue::BulkString(s) => ResponseValue::BulkString(s),
             crate::network::protocol::RespValue::Integer(i) => ResponseValue::Integer(i),
             crate::network::protocol::RespValue::Array(arr) => {
                 let converted_arr: Vec<ResponseValue> = arr

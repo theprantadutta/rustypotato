@@ -187,11 +187,25 @@ impl RespCodec {
             Some(RespValue::Array(elements)) => {
                 let consumed = cursor.position() as usize;
 
-                // Convert RESP array to command
+                // Convert RESP array to command. ParsedCommand still
+                // carries `Vec<String>` for now; the bytes-everywhere
+                // migration of the command surface lands in a later
+                // stage. We enforce UTF-8 here at the dispatch boundary
+                // (with a defined error message) so the codec itself
+                // remains binary-safe.
                 let mut args = Vec::new();
                 for element in elements {
                     match element {
-                        RespValue::BulkString(Some(s)) => args.push(s),
+                        RespValue::BulkString(Some(b)) => {
+                            let s = std::str::from_utf8(&b).map_err(|_| {
+                                RustyPotatoError::ProtocolError {
+                                    message: "Invalid UTF-8 in command argument".to_string(),
+                                    command: None,
+                                    source: None,
+                                }
+                            })?;
+                            args.push(s.to_string());
+                        }
                         RespValue::SimpleString(s) => args.push(s),
                         _ => {
                             return Err(RustyPotatoError::ProtocolError {
@@ -334,8 +348,8 @@ impl RespCodec {
                 return Ok(None); // Need more data
             }
 
-            let mut string_data = vec![0u8; length];
-            cursor.copy_to_slice(&mut string_data);
+            let mut payload = vec![0u8; length];
+            cursor.copy_to_slice(&mut payload);
 
             // Verify \r\n terminator
             if cursor.remaining() < 2 || cursor.get_u8() != b'\r' || cursor.get_u8() != b'\n' {
@@ -346,14 +360,12 @@ impl RespCodec {
                 });
             }
 
-            let string =
-                String::from_utf8(string_data).map_err(|_| RustyPotatoError::ProtocolError {
-                    message: "Invalid UTF-8 in bulk string".to_string(),
-                    command: None,
-                    source: None,
-                })?;
-
-            Ok(Some(RespValue::BulkString(Some(string))))
+            // No UTF-8 round-trip — bulk strings are arbitrary bytes by
+            // RESP. The command-args layer enforces UTF-8 only on the
+            // command-name slot (first array element).
+            Ok(Some(RespValue::BulkString(Some(bytes::Bytes::from(
+                payload,
+            )))))
         } else {
             Ok(None)
         }
@@ -447,11 +459,16 @@ impl Default for RespCodec {
     }
 }
 
-/// RESP value types for internal parsing
+/// RESP value types for internal parsing.
+///
+/// `BulkString` carries `Bytes` (not `String`) so non-UTF-8 payloads
+/// pass through the codec without lossy conversion. `SimpleString`
+/// and `Error` stay `String` because the RESP grammar already
+/// constrains them to single-line CRLF-free ASCII.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RespValue {
     SimpleString(String),
-    BulkString(Option<String>),
+    BulkString(Option<bytes::Bytes>),
     Integer(i64),
     Array(Vec<RespValue>),
     Error(String),
@@ -670,6 +687,26 @@ mod tests {
     }
 
     #[test]
+    fn decode_resp_bulk_string_preserves_arbitrary_bytes() {
+        // The codec layer must round-trip non-UTF-8 bulk strings — the
+        // RESP grammar says bulk strings are arbitrary octets. UTF-8 is
+        // only enforced later, when we extract a command-argument
+        // string at the dispatch boundary.
+        let mut codec = RespCodec::new();
+        let mut frame = b"$3\r\n".to_vec();
+        frame.extend_from_slice(&[0xFF, 0xFE, 0xFD]);
+        frame.extend_from_slice(b"\r\n");
+
+        let result = codec.decode_resp_value(&frame).unwrap();
+        match result {
+            Some(RespValue::BulkString(Some(b))) => {
+                assert_eq!(&b[..], &[0xFF, 0xFE, 0xFD]);
+            }
+            other => panic!("expected BulkString of 3 bytes, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_decode_invalid_utf8() {
         let mut codec = RespCodec::new();
         let mut data = b"*2\r\n$3\r\nGET\r\n$3\r\n".to_vec();
@@ -776,7 +813,9 @@ mod tests {
         let result = codec.parse_bulk_string(&mut cursor).unwrap();
         assert_eq!(
             result,
-            Some(RespValue::BulkString(Some("hello".to_string())))
+            Some(RespValue::BulkString(Some(bytes::Bytes::from_static(
+                b"hello"
+            ))))
         );
     }
 
@@ -799,7 +838,10 @@ mod tests {
         cursor.advance(1); // Skip the '$'
 
         let result = codec.parse_bulk_string(&mut cursor).unwrap();
-        assert_eq!(result, Some(RespValue::BulkString(Some("".to_string()))));
+        assert_eq!(
+            result,
+            Some(RespValue::BulkString(Some(bytes::Bytes::new())))
+        );
     }
 
     #[test]
