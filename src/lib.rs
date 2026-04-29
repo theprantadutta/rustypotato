@@ -34,9 +34,9 @@ pub use storage::{replay_aof_file, MemoryStore, PersistenceManager, StoredValue,
 
 use crate::network::ConnectionPool;
 use commands::{
-    DecrCommand, DelCommand, EchoCommand, ExistsCommand, ExpireCommand, GetCommand, HdelCommand,
-    HexistsCommand, HgetCommand, HgetallCommand, HsetCommand, IncrCommand, PingCommand, SetCommand,
-    TtlCommand,
+    DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand, ExpireCommand,
+    FlushdbCommand, GetCommand, HdelCommand, HexistsCommand, HgetCommand, HgetallCommand,
+    HsetCommand, IncrCommand, PingCommand, SetCommand, TtlCommand, TypeCommand,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -112,6 +112,9 @@ impl RustyPotatoServer {
         // Register server-level commands (PING/ECHO/etc.)
         command_registry.register(Box::new(PingCommand));
         command_registry.register(Box::new(EchoCommand));
+        command_registry.register(Box::new(DbsizeCommand));
+        command_registry.register(Box::new(TypeCommand));
+        command_registry.register(Box::new(FlushdbCommand));
 
         let command_registry = Arc::new(command_registry);
 
@@ -184,6 +187,10 @@ impl RustyPotatoServer {
         replay_registry.register(Box::new(HdelCommand));
         replay_registry.register(Box::new(HgetallCommand));
         replay_registry.register(Box::new(HexistsCommand));
+        // FLUSHDB is the only stage-7-partial command that mutates and
+        // can therefore appear in the AOF; the read-only PING/ECHO/
+        // DBSIZE/TYPE never get logged.
+        replay_registry.register(Box::new(FlushdbCommand));
 
         let replay_storage = Arc::clone(&server.storage);
         replay_aof_file(&aof_path, |cmd| {
@@ -354,7 +361,7 @@ mod tests {
         let stats = server.stats().await;
 
         // 13 storage commands + PING + ECHO = 15
-        assert_eq!(stats.registered_commands, 15);
+        assert_eq!(stats.registered_commands, 18);
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -369,7 +376,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 15);
+        assert_eq!(server.command_registry().command_count(), 18);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));
