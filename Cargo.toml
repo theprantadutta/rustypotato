@@ -61,6 +61,10 @@ path = "src/bin/cli.rs"
 name = "quick_bench"
 path = "tools/quick_bench.rs"
 
+[[bin]]
+name = "network_bench"
+path = "tools/network_bench.rs"
+
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

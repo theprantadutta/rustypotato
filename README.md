@@ -763,30 +763,55 @@ cargo flamegraph --bin rustypotato-server
 
 ## 📊 Performance
 
-### Benchmarks
+There are two benchmarks in this repository, and they measure
+**different things**. Reading just one number out of context will
+mislead you, so the README is honest about which is which.
 
-RustyPotato delivers exceptional performance with lock-free concurrent data structures:
+### Network benchmark (the honest one)
 
-| Operation | Throughput | Latency (p50) | Latency (p99) |
-|-----------|------------|---------------|---------------|
-| **GET** | **1,137,656 ops/sec** | 800 ns | 1.60 µs |
-| **DELETE** | **884,173 ops/sec** | - | - |
-| **SET** | **499,500 ops/sec** | 1.20 µs | 3.00 µs |
-| **INCR** | **433,839 ops/sec** | - | - |
-
-*Benchmarks measured on actual hardware. Results may vary based on system configuration.*
-
-### Quick Performance Check
+`tools/network_bench.rs` connects via real TCP, encodes commands as
+RESP, runs 50 concurrent clients with pipeline depth 16, and counts
+round-trip operations per second. These are the numbers a real client
+sees and they are directly comparable to `redis-benchmark` output.
 
 ```bash
-# Run human-readable benchmark report
+# Start the server first
+./target/release/rustypotato-server --port 6379 &
+
+# Then run the network benchmark
+cargo run --release --bin network_bench
+```
+
+Output reports throughput and p50/p95/p99 latency for SET, GET, and
+INCR. Tweak via `BENCH_CLIENTS`, `BENCH_REQUESTS`, `BENCH_PIPELINE`,
+and `BENCH_ADDR` env vars. **Numbers from this tool are what you
+should quote when comparing to other key-value stores.**
+
+### Storage microbench (in-process ceiling)
+
+`tools/quick_bench.rs` measures `MemoryStore` directly — no TCP, no
+RESP, no connection pool, no command dispatch. It reflects the
+storage-layer ceiling and is useful for catching regressions in the
+hot read path, but it is **not** a "what does this server do for
+clients" claim.
+
+```bash
 cargo run --release --bin quick_bench
+```
 
-# Run detailed Criterion benchmarks
+Earlier versions of this README quoted in-process microbench numbers
+(GET ~1.1M ops/sec etc.) as the headline performance — that was
+misleading because it bypassed the entire network and protocol layer.
+The numbers below come from the network benchmark on a developer
+laptop and will be filled in once the Bytes-everywhere migration
+(planned next) lands; until then please run `network_bench` yourself
+on your hardware to get representative numbers.
+
+### Detailed Criterion benchmarks
+
+```bash
 cargo bench --bench performance_benchmarks
-
-# View HTML reports
-# Open: target/criterion/report/index.html
+# HTML report: target/criterion/report/index.html
 ```
 
 For complete benchmarking documentation, see [BENCHMARKING.md](BENCHMARKING.md).
