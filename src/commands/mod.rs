@@ -23,7 +23,7 @@ pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use server::{
     DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand, KeysCommand, PingCommand, TypeCommand,
 };
-pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
+pub use string::{DelCommand, ExistsCommand, GetCommand, MgetCommand, MsetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};
 
 use bytes::Bytes;

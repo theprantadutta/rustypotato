@@ -37,7 +37,7 @@ use commands::{
     DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand, ExpireCommand,
     FlushdbCommand, GetCommand, HdelCommand, HexistsCommand, HgetCommand, HgetallCommand,
     HkeysCommand, HlenCommand, HmgetCommand, HsetCommand, HvalsCommand, IncrCommand, InfoCommand,
-    KeysCommand, PingCommand, SetCommand, TtlCommand, TypeCommand,
+    KeysCommand, MgetCommand, MsetCommand, PingCommand, SetCommand, TtlCommand, TypeCommand,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -123,6 +123,10 @@ impl RustyPotatoServer {
         command_registry.register(Box::new(InfoCommand));
         command_registry.register(Box::new(KeysCommand));
 
+        // Register batch string ops (Stage 7 partial 5)
+        command_registry.register(Box::new(MgetCommand));
+        command_registry.register(Box::new(MsetCommand));
+
         let command_registry = Arc::new(command_registry);
 
         // Create TCP server with all components wired together
@@ -185,6 +189,7 @@ impl RustyPotatoServer {
         replay_registry.register(Box::new(GetCommand));
         replay_registry.register(Box::new(DelCommand));
         replay_registry.register(Box::new(ExistsCommand));
+        replay_registry.register(Box::new(MsetCommand));
         replay_registry.register(Box::new(ExpireCommand));
         replay_registry.register(Box::new(TtlCommand));
         replay_registry.register(Box::new(IncrCommand));
@@ -369,7 +374,8 @@ mod tests {
 
         // 13 base commands + PING/ECHO/DBSIZE/TYPE/FLUSHDB/INFO/KEYS = 20
         // + HMGET/HKEYS/HVALS/HLEN (Stage 8 partial 3) = 24
-        assert_eq!(stats.registered_commands, 24);
+        // + MGET/MSET (Stage 7 partial 5) = 26
+        assert_eq!(stats.registered_commands, 26);
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -377,6 +383,8 @@ mod tests {
         assert!(stats.command_names.contains(&"ECHO".to_string()));
         assert!(stats.command_names.contains(&"HMGET".to_string()));
         assert!(stats.command_names.contains(&"HLEN".to_string()));
+        assert!(stats.command_names.contains(&"MGET".to_string()));
+        assert!(stats.command_names.contains(&"MSET".to_string()));
         assert_eq!(stats.config_summary, "127.0.0.1:6379");
     }
 
@@ -386,7 +394,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 24);
+        assert_eq!(server.command_registry().command_count(), 26);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));
@@ -395,6 +403,8 @@ mod tests {
         assert!(server.command_registry().has_command("HKEYS"));
         assert!(server.command_registry().has_command("HVALS"));
         assert!(server.command_registry().has_command("HLEN"));
+        assert!(server.command_registry().has_command("MGET"));
+        assert!(server.command_registry().has_command("MSET"));
         assert!(server.command_registry().has_command("PING"));
         assert!(server.command_registry().has_command("ECHO"));
     }
