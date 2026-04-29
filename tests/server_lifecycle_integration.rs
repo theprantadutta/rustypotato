@@ -4,7 +4,7 @@
 //! including configuration loading, component integration, signal handling,
 //! and graceful shutdown behavior.
 
-use rustypotato::{Config, RustyPotatoServer};
+use rustypotato::{config::FsyncPolicy, Config, RustyPotatoServer};
 use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -575,4 +575,154 @@ format = "Pretty"
     std::env::remove_var("RUSTYPOTATO_CONFIG_PATH");
 
     info!("Server binary startup test completed");
+}
+
+/// Helper for the BGREWRITEAOF test: build a RESP array from string parts.
+fn resp_array(parts: &[&str]) -> Vec<u8> {
+    let mut out = format!("*{}\r\n", parts.len()).into_bytes();
+    for p in parts {
+        out.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
+        out.extend_from_slice(p.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out
+}
+
+/// Stage 11: BGREWRITEAOF compacts the AOF and the post-rewrite file
+/// is recoverable on restart.
+///
+/// 1. Pour ~100 overwrites against the same 5 keys + a hash + a TTL
+///    key into the AOF.
+/// 2. BGREWRITEAOF rewrites the file as a snapshot.
+/// 3. Pre-rewrite size > 4× post-rewrite size.
+/// 4. Restart server pointing at the new AOF; values match the final
+///    pre-rewrite state and the TTL still ticks down from ~300s.
+#[tokio::test]
+#[traced_test]
+async fn test_bgrewriteaof_compacts_and_recovers() {
+    let tmp = TempDir::new().expect("temp dir");
+    let aof = tmp.path().join("rewrite.aof");
+
+    let mut config = create_test_config();
+    config.storage.aof_enabled = true;
+    config.storage.aof_path = aof.clone();
+    // Always-fsync so we don't have to wait for the 1s periodic flush
+    // before measuring the file size.
+    config.storage.aof_fsync_policy = FsyncPolicy::Always;
+
+    // Phase 1: write a fat AOF and trigger BGREWRITEAOF.
+    let pre_size: u64;
+    let post_size: u64;
+    {
+        let mut server = RustyPotatoServer::open(config.clone())
+            .await
+            .expect("open server");
+        let addr = server.start_with_addr().await.expect("start server");
+        sleep(Duration::from_millis(100)).await;
+
+        let mut stream = TcpStream::connect(addr).await.expect("connect");
+
+        for i in 0..100 {
+            let v = format!("v{i}");
+            for k in ["a", "b", "c", "d", "e"] {
+                let r = send_command(
+                    &mut stream,
+                    &String::from_utf8_lossy(&resp_array(&["SET", k, &v])),
+                )
+                .await
+                .expect("SET");
+                assert_eq!(r, "+OK\r\n");
+            }
+        }
+        // Hash with two fields (one variadic HSET).
+        let _ = send_command(
+            &mut stream,
+            &String::from_utf8_lossy(&resp_array(&["HSET", "h", "f1", "hv1", "f2", "hv2"])),
+        )
+        .await;
+        // TTL'd key.
+        let _ = send_command(
+            &mut stream,
+            &String::from_utf8_lossy(&resp_array(&["SET", "ttl_key", "ttl_val"])),
+        )
+        .await;
+        let _ = send_command(
+            &mut stream,
+            &String::from_utf8_lossy(&resp_array(&["EXPIRE", "ttl_key", "300"])),
+        )
+        .await;
+
+        // Let the writer flush.
+        sleep(Duration::from_millis(300)).await;
+        pre_size = std::fs::metadata(&aof).expect("stat aof").len();
+        assert!(pre_size > 5_000, "expected fat AOF, got {pre_size}");
+
+        // Trigger compaction.
+        let r = send_command(
+            &mut stream,
+            &String::from_utf8_lossy(&resp_array(&["BGREWRITEAOF"])),
+        )
+        .await
+        .expect("BGREWRITEAOF");
+        assert!(
+            r.starts_with("+Background append only file rewriting started"),
+            "BGREWRITEAOF response: {r}"
+        );
+        // Wait for the swap to settle.
+        sleep(Duration::from_millis(300)).await;
+
+        post_size = std::fs::metadata(&aof).expect("stat aof").len();
+        debug!("BGREWRITEAOF pre={pre_size} post={post_size}");
+        assert!(
+            post_size < pre_size / 4,
+            "rewrite should shrink the AOF by ≥4x: pre={pre_size}, post={post_size}"
+        );
+
+        drop(stream);
+        server.shutdown().await.expect("shutdown");
+    }
+
+    // Phase 2: restart, state must match final pre-rewrite values.
+    {
+        let mut server = RustyPotatoServer::open(config).await.expect("reopen");
+        let addr = server.start_with_addr().await.expect("restart");
+        sleep(Duration::from_millis(100)).await;
+
+        let mut stream = TcpStream::connect(addr).await.expect("connect");
+        for k in ["a", "b", "c", "d", "e"] {
+            let r = send_command(
+                &mut stream,
+                &String::from_utf8_lossy(&resp_array(&["GET", k])),
+            )
+            .await
+            .expect("GET");
+            assert_eq!(parse_bulk_response(&r), Some("v99".to_string()), "key={k}");
+        }
+
+        // Hash survived.
+        let r = send_command(
+            &mut stream,
+            &String::from_utf8_lossy(&resp_array(&["HGET", "h", "f1"])),
+        )
+        .await
+        .expect("HGET");
+        assert_eq!(parse_bulk_response(&r), Some("hv1".to_string()));
+
+        // TTL survived (PEXPIREAT was emitted on rewrite). Should still
+        // have a positive TTL close to 300s.
+        let r = send_command(
+            &mut stream,
+            &String::from_utf8_lossy(&resp_array(&["TTL", "ttl_key"])),
+        )
+        .await
+        .expect("TTL");
+        // Integer reply: ":<ttl>\r\n"
+        assert!(
+            r.starts_with(":2") || r.starts_with(":3"),
+            "expected TTL ~300s after rewrite+restart, got {r:?}"
+        );
+
+        drop(stream);
+        server.shutdown().await.expect("shutdown");
+    }
 }

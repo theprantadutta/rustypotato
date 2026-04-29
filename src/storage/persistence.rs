@@ -7,12 +7,14 @@
 //! that what's persisted matches what was executed and removes any need
 //! for a parallel command enum or text-based serialization.
 
+use crate::commands::ResponseValue;
 use crate::config::{Config, FsyncPolicy};
 use crate::error::{Result, RustyPotatoError};
 use crate::network::protocol::RespCodec;
+use crate::storage::memory::{StoredValue, ValueType};
 use bytes::Bytes;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
@@ -23,6 +25,106 @@ use tracing::{debug, error, info};
 /// Acts as a backpressure boundary — when full, callers wait.
 const AOF_CHANNEL_CAPACITY: usize = 8192;
 
+/// Render one entry from a `MemoryStore::snapshot()` into the
+/// RESP-encoded command frames needed to recreate it on replay:
+///
+/// - `String`/`Integer` → `SET key value`
+/// - `Hash`             → `HSET key f1 v1 f2 v2 ...` (variadic)
+/// - `List`             → skipped (no list commands yet)
+///
+/// If the entry has a TTL, a follow-up `PEXPIREAT key <unix-ms>` is
+/// emitted so the deadline survives the rewrite — relative `EX`/`PX`
+/// would drift across the rewrite window.
+fn encode_snapshot_entry(key: &str, value: &StoredValue, frames: &mut Vec<Bytes>) -> Result<()> {
+    let mut codec = RespCodec::new();
+
+    let array = match &value.value {
+        ValueType::String(b) => Some(ResponseValue::Array(vec![
+            ResponseValue::bulk("SET"),
+            ResponseValue::bulk(key.to_string()),
+            ResponseValue::bulk(b.clone()),
+        ])),
+        ValueType::Integer(i) => Some(ResponseValue::Array(vec![
+            ResponseValue::bulk("SET"),
+            ResponseValue::bulk(key.to_string()),
+            ResponseValue::bulk(i.to_string()),
+        ])),
+        ValueType::Hash(h) => {
+            if h.is_empty() {
+                None
+            } else {
+                let mut parts = Vec::with_capacity(2 + h.len() * 2);
+                parts.push(ResponseValue::bulk("HSET"));
+                parts.push(ResponseValue::bulk(key.to_string()));
+                for (f, v) in h {
+                    parts.push(ResponseValue::bulk(f.clone()));
+                    parts.push(ResponseValue::bulk(v.clone()));
+                }
+                Some(ResponseValue::Array(parts))
+            }
+        }
+        // Lists not yet supported in the rewrite (no LPUSH/RPUSH command
+        // exists). When list commands land, add a branch here.
+        ValueType::List(_) => None,
+    };
+
+    if let Some(array) = array {
+        let frame = codec
+            .encode(&array)
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!("Failed to encode snapshot entry for {key}: {e}"),
+                source: None,
+                recoverable: false,
+            })?;
+        frames.push(Bytes::from(frame));
+    }
+
+    // TTL preservation via PEXPIREAT (absolute, in ms since epoch).
+    // The `expires_at` is monotonic, so we translate it into wall
+    // clock by computing the remaining duration from now.
+    if let Some(expires_at) = value.expires_at {
+        let now = Instant::now();
+        if expires_at > now {
+            let remaining = expires_at - now;
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| RustyPotatoError::PersistenceError {
+                    message: "system clock before UNIX epoch".to_string(),
+                    source: None,
+                    recoverable: false,
+                })?
+                .as_millis() as u64;
+            let target_ms = now_ms.saturating_add(remaining.as_millis() as u64);
+            let pexpireat = ResponseValue::Array(vec![
+                ResponseValue::bulk("PEXPIREAT"),
+                ResponseValue::bulk(key.to_string()),
+                ResponseValue::bulk(target_ms.to_string()),
+            ]);
+            let frame =
+                codec
+                    .encode(&pexpireat)
+                    .map_err(|e| RustyPotatoError::PersistenceError {
+                        message: format!("Failed to encode PEXPIREAT for {key}: {e}"),
+                        source: None,
+                        recoverable: false,
+                    })?;
+            frames.push(Bytes::from(frame));
+        }
+    }
+
+    Ok(())
+}
+
+/// Render a full snapshot (from `MemoryStore::snapshot()`) into RESP
+/// frames suitable for `PersistenceManager::rewrite_aof`.
+pub fn snapshot_to_frames(snapshot: &[(String, StoredValue)]) -> Result<Vec<Bytes>> {
+    let mut frames = Vec::with_capacity(snapshot.len());
+    for (key, value) in snapshot {
+        encode_snapshot_entry(key, value, &mut frames)?;
+    }
+    Ok(frames)
+}
+
 /// Messages the writer task accepts from the rest of the system.
 #[derive(Debug)]
 enum WriterCmd {
@@ -32,6 +134,18 @@ enum WriterCmd {
     Flush(oneshot::Sender<Result<()>>),
     /// Report current file size; reply with the answer.
     FileSize(oneshot::Sender<Result<u64>>),
+    /// Atomically replace the live AOF file with `temp_path`. The
+    /// writer task flushes its current buffer (which gets discarded
+    /// with the old file), runs the rename, then reopens the new
+    /// file in append mode for subsequent writes.
+    ///
+    /// Caller must hold a write barrier preventing new mutations
+    /// during this operation — otherwise mutations between the
+    /// snapshot and the swap are lost.
+    SwapFile {
+        temp_path: PathBuf,
+        reply: oneshot::Sender<Result<()>>,
+    },
     /// Stop the writer task gracefully (final flush, then exit).
     Shutdown(oneshot::Sender<Result<()>>),
 }
@@ -169,6 +283,71 @@ impl AofWriter {
         })?;
         Ok(metadata.len() + self.buffer.len() as u64)
     }
+
+    /// Atomically replace the current AOF file with `temp_path`'s
+    /// contents. The previous file (and any pending buffer contents)
+    /// are discarded — the caller is responsible for ensuring the
+    /// rewriter's snapshot already contains the relevant state.
+    ///
+    /// The Unix rename is atomic by POSIX. On Windows, `std::fs::rename`
+    /// (and tokio's wrapper) maps to `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`
+    /// which is "mostly" atomic — there's a narrow window where a crash
+    /// between the unlink and the rename could leave the destination
+    /// missing. Documented as a known limitation; real Redis on Windows
+    /// has the same constraint.
+    async fn swap_file(&mut self, temp_path: PathBuf) -> Result<()> {
+        // Flush any buffered writes that haven't hit disk yet — these
+        // were destined for the OLD file. Per the contract, the caller
+        // is expected to hold a write barrier, so this buffer should
+        // be empty in practice. Drop it without writing to be safe.
+        self.buffer.clear();
+
+        // Drop the old file handle BEFORE the rename so Windows can
+        // unlink the destination. POSIX is fine either way.
+        let placeholder = OpenOptions::new()
+            .read(true)
+            .open(&temp_path)
+            .await
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!("Cannot open temp AOF {}: {e}", temp_path.display()),
+                source: Some(e),
+                recoverable: false,
+            })?;
+        // We swap `self.file` into `placeholder` to drop the old handle.
+        let _ = std::mem::replace(&mut self.file, placeholder);
+
+        tokio::fs::rename(&temp_path, &self.file_path)
+            .await
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!(
+                    "Atomic rename {} → {} failed: {e}",
+                    temp_path.display(),
+                    self.file_path.display()
+                ),
+                source: Some(e),
+                recoverable: false,
+            })?;
+
+        // Reopen in append mode so subsequent records go to the new file.
+        let new_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.file_path)
+            .await
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!("Cannot reopen AOF {}: {e}", self.file_path.display()),
+                source: Some(e),
+                recoverable: false,
+            })?;
+        self.file = new_file;
+        self.last_flush = Instant::now();
+
+        info!(
+            "AOF rewrite committed: swapped to {}",
+            self.file_path.display()
+        );
+        Ok(())
+    }
 }
 
 /// Coordinates AOF logging from the rest of the system.
@@ -268,6 +447,100 @@ impl PersistenceManager {
     pub fn aof_path(&self) -> &Path {
         &self.aof_path
     }
+
+    /// Compact the AOF by writing `frames` (a sequence of RESP-encoded
+    /// commands representing the live store snapshot) to a temp file
+    /// and atomically renaming it over the live AOF.
+    ///
+    /// **Caller contract**: hold a write barrier preventing new
+    /// mutations from being dispatched while this is running. The
+    /// `MemoryStore::snapshot` that produced these frames is only
+    /// consistent if no mutations ran between snapshot capture and
+    /// commit; otherwise the swap discards those mutations along with
+    /// the old file.
+    pub async fn rewrite_aof(&self, frames: Vec<Bytes>) -> Result<()> {
+        let Some(sender) = &self.sender else {
+            return Ok(()); // AOF disabled — no-op.
+        };
+
+        // Write all frames to a sibling temp file. Suffix encodes the
+        // PID so concurrent rewrites (which we don't allow but which
+        // a misbehaving caller might attempt) don't collide.
+        let temp_path = self
+            .aof_path
+            .with_extension(format!("rewrite.{}.tmp", std::process::id()));
+
+        if let Some(parent) = temp_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    RustyPotatoError::PersistenceError {
+                        message: format!(
+                            "Cannot ensure rewrite-temp dir {}: {e}",
+                            parent.display()
+                        ),
+                        source: Some(e),
+                        recoverable: false,
+                    }
+                })?;
+            }
+        }
+
+        let mut temp = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)
+            .await
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!("Cannot open rewrite temp {}: {e}", temp_path.display()),
+                source: Some(e),
+                recoverable: false,
+            })?;
+
+        for frame in &frames {
+            temp.write_all(frame)
+                .await
+                .map_err(|e| RustyPotatoError::PersistenceError {
+                    message: format!("Rewrite write failed: {e}"),
+                    source: Some(e),
+                    recoverable: true,
+                })?;
+        }
+        temp.flush()
+            .await
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!("Rewrite flush failed: {e}"),
+                source: Some(e),
+                recoverable: true,
+            })?;
+        temp.sync_all()
+            .await
+            .map_err(|e| RustyPotatoError::PersistenceError {
+                message: format!("Rewrite fsync failed: {e}"),
+                source: Some(e),
+                recoverable: true,
+            })?;
+        // Drop the handle so the writer task can rename the file out.
+        drop(temp);
+
+        // Hand the temp path to the writer task for the atomic swap.
+        let (tx, rx) = oneshot::channel();
+        sender
+            .send(WriterCmd::SwapFile {
+                temp_path: temp_path.clone(),
+                reply: tx,
+            })
+            .await
+            .map_err(channel_closed)?;
+        match rx.await.map_err(reply_dropped)? {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Best-effort cleanup of the temp file on failure.
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                Err(e)
+            }
+        }
+    }
 }
 
 fn channel_closed(_: mpsc::error::SendError<WriterCmd>) -> RustyPotatoError {
@@ -310,6 +583,10 @@ async fn run_writer_task(mut writer: AofWriter, mut receiver: mpsc::Receiver<Wri
                 }
                 Some(WriterCmd::FileSize(reply)) => {
                     let result = writer.current_file_size().await;
+                    let _ = reply.send(result);
+                }
+                Some(WriterCmd::SwapFile { temp_path, reply }) => {
+                    let result = writer.swap_file(temp_path).await;
                     let _ = reply.send(result);
                 }
                 Some(WriterCmd::Shutdown(reply)) => {

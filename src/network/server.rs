@@ -21,6 +21,13 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+/// Asynchronous read/write barrier coordinating BGREWRITEAOF with
+/// in-flight mutations. Mutating commands acquire the read side
+/// (concurrent), BGREWRITEAOF acquires the write side (exclusive).
+/// Read-only commands skip the lock entirely so they continue to
+/// flow during a rewrite.
+pub type RewriteBarrier = Arc<tokio::sync::RwLock<()>>;
+
 /// TCP server for handling client connections
 pub struct TcpServer {
     config: Arc<Config>,
@@ -29,6 +36,7 @@ pub struct TcpServer {
     connection_pool: Arc<ConnectionPool>,
     metrics: Arc<MetricsCollector>,
     persistence: Option<Arc<PersistenceManager>>,
+    rewrite_barrier: RewriteBarrier,
     shutdown_tx: broadcast::Sender<()>,
     listening_addr: Option<SocketAddr>,
 }
@@ -51,6 +59,7 @@ impl TcpServer {
             connection_pool,
             metrics,
             persistence: None,
+            rewrite_barrier: Arc::new(tokio::sync::RwLock::new(())),
             shutdown_tx,
             listening_addr: None,
         }
@@ -73,9 +82,24 @@ impl TcpServer {
             connection_pool,
             metrics,
             persistence: None,
+            rewrite_barrier: Arc::new(tokio::sync::RwLock::new(())),
             shutdown_tx,
             listening_addr: None,
         }
+    }
+
+    /// Replace the rewrite barrier with one shared across the rest of
+    /// the server. Used by `RustyPotatoServer` to give the BGREWRITEAOF
+    /// command and the dispatch path a common coordination handle.
+    pub fn with_rewrite_barrier(mut self, barrier: RewriteBarrier) -> Self {
+        self.rewrite_barrier = barrier;
+        self
+    }
+
+    /// Get a clone of the rewrite barrier — used by callers (the lib's
+    /// BGREWRITEAOF wiring) that need to acquire the write side.
+    pub fn rewrite_barrier(&self) -> RewriteBarrier {
+        Arc::clone(&self.rewrite_barrier)
     }
 
     /// Attach a persistence manager. Mutating commands will be logged to its
@@ -183,6 +207,7 @@ impl TcpServer {
         let config = Arc::clone(&self.config);
         let metrics = Arc::clone(&self.metrics);
         let persistence = self.persistence.clone();
+        let rewrite_barrier = Arc::clone(&self.rewrite_barrier);
         let bg_shutdown_tx = shutdown_tx.clone();
 
         tokio::spawn(async move {
@@ -193,6 +218,7 @@ impl TcpServer {
                 connection_pool,
                 metrics,
                 persistence,
+                rewrite_barrier,
                 shutdown_tx: bg_shutdown_tx.clone(),
                 listening_addr: Some(local_addr),
             };
@@ -342,6 +368,7 @@ impl TcpServer {
         let config = Arc::clone(&self.config);
         let metrics = Arc::clone(&self.metrics);
         let persistence = self.persistence.clone();
+        let rewrite_barrier = Arc::clone(&self.rewrite_barrier);
 
         tokio::spawn(async move {
             let connection_result =
@@ -353,6 +380,7 @@ impl TcpServer {
                         config,
                         metrics.clone(),
                         persistence,
+                        rewrite_barrier,
                         &mut shutdown_rx,
                     )
                     .await
@@ -463,6 +491,7 @@ impl TcpServer {
     }
 
     /// Handle a single client connection
+    #[allow(clippy::too_many_arguments)]
     async fn handle_connection(
         connection: Arc<tokio::sync::Mutex<ClientConnection>>,
         storage: Arc<MemoryStore>,
@@ -470,6 +499,7 @@ impl TcpServer {
         config: Arc<Config>,
         metrics: Arc<MetricsCollector>,
         persistence: Option<Arc<PersistenceManager>>,
+        rewrite_barrier: RewriteBarrier,
         shutdown_rx: &mut broadcast::Receiver<()>,
     ) -> Result<()> {
         let mut codec = RespCodec::with_limits(crate::network::protocol::CodecLimits {
@@ -526,6 +556,7 @@ impl TcpServer {
                                 &config,
                                 &metrics,
                                 persistence.as_ref(),
+                                &rewrite_barrier,
                             ).await {
                                 Ok((processed_count, should_close)) => {
                                     commands_processed += processed_count;
@@ -628,6 +659,7 @@ impl TcpServer {
         config: &Config,
         metrics: &MetricsCollector,
         persistence: Option<&Arc<PersistenceManager>>,
+        rewrite_barrier: &RewriteBarrier,
     ) -> Result<(u64, bool)> {
         let mut commands_processed = 0u64;
         let mut should_close = false;
@@ -661,9 +693,21 @@ impl TcpServer {
                         conn.increment_commands_processed();
                     }
 
-                    // Execute the command with timing
+                    // Execute the command with timing.
+                    //
+                    // Mutating commands hold the rewrite barrier as a
+                    // read guard so a concurrent BGREWRITEAOF (which
+                    // takes the write side) can pause writes while
+                    // it snapshots+swaps. Read-only commands skip the
+                    // lock so reads keep flowing during a rewrite.
+                    let is_mutation = command_registry.is_mutation(&command.name);
                     let timer = Timer::start();
-                    let result = command_registry.execute(&command, storage).await;
+                    let result = if is_mutation {
+                        let _guard = rewrite_barrier.read().await;
+                        command_registry.execute(&command, storage).await
+                    } else {
+                        command_registry.execute(&command, storage).await
+                    };
                     let command_duration = timer.stop();
 
                     // Record command metrics

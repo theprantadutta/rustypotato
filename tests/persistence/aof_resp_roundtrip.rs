@@ -193,3 +193,4 @@ async fn aof_round_trip_survives_drop_without_shutdown() {
         server.shutdown().await.unwrap();
     }
 }
+

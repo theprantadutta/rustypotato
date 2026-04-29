@@ -34,11 +34,12 @@ pub use storage::{replay_aof_file, MemoryStore, PersistenceManager, StoredValue,
 
 use crate::network::ConnectionPool;
 use commands::{
-    CommandCommand, DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand,
-    ExpireCommand, ExpireatCommand, FlushdbCommand, GetCommand, HdelCommand, HexistsCommand,
-    HgetCommand, HgetallCommand, HkeysCommand, HlenCommand, HmgetCommand, HsetCommand,
-    HvalsCommand, IncrCommand, InfoCommand, KeysCommand, MgetCommand, MsetCommand, PexpireCommand,
-    PexpireatCommand, PingCommand, PttlCommand, QuitCommand, SetCommand, TtlCommand, TypeCommand,
+    BgrewriteaofCommand, CommandCommand, DbsizeCommand, DecrCommand, DelCommand, EchoCommand,
+    ExistsCommand, ExpireCommand, ExpireatCommand, FlushdbCommand, GetCommand, HdelCommand,
+    HexistsCommand, HgetCommand, HgetallCommand, HkeysCommand, HlenCommand, HmgetCommand,
+    HsetCommand, HvalsCommand, IncrCommand, InfoCommand, KeysCommand, MgetCommand, MsetCommand,
+    PexpireCommand, PexpireatCommand, PingCommand, PttlCommand, QuitCommand, SetCommand,
+    TtlCommand, TypeCommand,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +52,10 @@ pub struct RustyPotatoServer {
     command_registry: Arc<CommandRegistry>,
     metrics: Arc<MetricsCollector>,
     persistence: Option<Arc<PersistenceManager>>,
+    /// Slot wired into the `BgrewriteaofCommand` instance in the
+    /// registry so it can find the persistence manager once
+    /// `with_persistence` is called.
+    bgrewrite_persistence_slot: Arc<std::sync::OnceLock<Arc<PersistenceManager>>>,
     /// Captured from `TcpServer` at construction time. Stays accessible
     /// even after `start()` has consumed the inner `TcpServer`, so
     /// `shutdown()` can signal the running accept loop.
@@ -136,6 +141,19 @@ impl RustyPotatoServer {
         // COMMAND so COMMAND COUNT sees a stable total.
         command_registry.register(Box::new(QuitCommand));
 
+        // BGREWRITEAOF coordinates with mutating dispatch via a shared
+        // RwLock — readers (mutations) hold it as a read guard, the
+        // command itself holds it as a write guard. The persistence
+        // handle is wired up later by `with_persistence`.
+        let rewrite_barrier: crate::network::server::RewriteBarrier =
+            Arc::new(tokio::sync::RwLock::new(()));
+        let bgrewrite_persistence_slot: Arc<std::sync::OnceLock<Arc<PersistenceManager>>> =
+            Arc::new(std::sync::OnceLock::new());
+        command_registry.register(Box::new(BgrewriteaofCommand::new(
+            Arc::clone(&bgrewrite_persistence_slot),
+            Arc::clone(&rewrite_barrier),
+        )));
+
         // COMMAND must go last — it carries the total count, which
         // includes itself.
         let total_with_command = command_registry.command_count() + 1;
@@ -143,13 +161,13 @@ impl RustyPotatoServer {
 
         let command_registry = Arc::new(command_registry);
 
-        // Create TCP server with all components wired together
         let tcp_server = TcpServer::with_metrics(
             Arc::clone(&config),
             Arc::clone(&storage),
             Arc::clone(&command_registry),
             Arc::clone(&metrics),
-        );
+        )
+        .with_rewrite_barrier(rewrite_barrier);
 
         // Capture shutdown signal + connection pool BEFORE start() consumes
         // the TcpServer, so shutdown() remains functional after that.
@@ -162,6 +180,7 @@ impl RustyPotatoServer {
             command_registry,
             metrics,
             persistence: None,
+            bgrewrite_persistence_slot,
             shutdown_tx,
             connection_pool,
             tcp_server: Some(tcp_server),
@@ -173,6 +192,13 @@ impl RustyPotatoServer {
     /// successfully execute. Must be called before `start()`.
     pub fn with_persistence(mut self, persistence: Arc<PersistenceManager>) -> Self {
         self.persistence = Some(Arc::clone(&persistence));
+        // Wire BGREWRITEAOF up to the same persistence manager. The
+        // OnceLock can only be set once; we ignore the result because
+        // calling `with_persistence` twice is a programmer error and
+        // the second call is silently a no-op for BGREWRITEAOF.
+        let _ = self
+            .bgrewrite_persistence_slot
+            .set(Arc::clone(&persistence));
         if let Some(server) = self.tcp_server.take() {
             self.tcp_server = Some(server.with_persistence(persistence));
         }
@@ -394,7 +420,8 @@ mod tests {
         // + MGET/MSET (Stage 7 partial 5) = 26
         // + PTTL/PEXPIRE/EXPIREAT/PEXPIREAT (Stage 8 partial 4) = 30
         // + QUIT/COMMAND (Stage 7 partial 6) = 32
-        assert_eq!(stats.registered_commands, 32);
+        // + BGREWRITEAOF (Stage 11) = 33
+        assert_eq!(stats.registered_commands, 33);
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -417,7 +444,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 32);
+        assert_eq!(server.command_registry().command_count(), 33);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));

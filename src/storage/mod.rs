@@ -11,7 +11,7 @@ pub use expiration::{ExpirationEntry, ExpirationManager};
 pub use memory::{
     ExpireFlag, MemoryStore, SetExistence, SetOutcome, SetTtlOption, StoredValue, ValueType,
 };
-pub use persistence::{replay_aof_file, PersistenceManager};
+pub use persistence::{replay_aof_file, snapshot_to_frames, PersistenceManager};
 
 /// Storage operation results
 pub type StorageResult<T> = Result<T, crate::error::RustyPotatoError>;

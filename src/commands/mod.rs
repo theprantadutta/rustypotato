@@ -21,8 +21,8 @@ pub use hash::{
 };
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use server::{
-    CommandCommand, DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand, KeysCommand,
-    PingCommand, QuitCommand, TypeCommand,
+    BgrewriteaofCommand, CommandCommand, DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand,
+    KeysCommand, PingCommand, QuitCommand, TypeCommand,
 };
 pub use string::{DelCommand, ExistsCommand, GetCommand, MgetCommand, MsetCommand, SetCommand};
 pub use ttl::{

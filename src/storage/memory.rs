@@ -828,6 +828,29 @@ impl MemoryStore {
         self.data.iter().map(|entry| entry.key().clone()).collect()
     }
 
+    /// Take a snapshot of all live (non-expired) entries in the store.
+    ///
+    /// The snapshot is consistent only on a per-shard basis (DashMap
+    /// shard-locks during iteration). Concurrent mutations to *other*
+    /// shards may complete mid-iteration. The caller is responsible
+    /// for guaranteeing global consistency if needed — typically by
+    /// holding an external write barrier (see `BGREWRITEAOF`).
+    ///
+    /// Expired entries are skipped (the cleanup happens lazily on
+    /// access; we don't want them showing up in a rewrite).
+    pub fn snapshot(&self) -> Vec<(String, StoredValue)> {
+        self.data
+            .iter()
+            .filter_map(|entry| {
+                if entry.is_expired() {
+                    None
+                } else {
+                    Some((entry.key().clone(), entry.value().clone()))
+                }
+            })
+            .collect()
+    }
+
     /// Clear all data from the store
     pub fn clear(&self) {
         self.data.clear();

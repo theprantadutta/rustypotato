@@ -494,6 +494,105 @@ impl Command for CommandCommand {
     }
 }
 
+/// `BGREWRITEAOF` — compact the AOF by walking the live store
+/// snapshot and writing a fresh AOF that contains just the minimum
+/// commands needed to recreate state (SET/HSET, plus PEXPIREAT for
+/// TTLs). Atomically renames the new file over the old.
+///
+/// **v1 tradeoff**: holds a write barrier across the entire
+/// snapshot+swap window. Reads continue to flow; mutating commands
+/// (SET, INCR, HSET, …) pause until the rewrite finishes. This is
+/// admin-friendly (predictable, correct, no data loss) and matches
+/// the standard guidance to run BGREWRITEAOF during quiet periods.
+/// Real Redis avoids the pause via `fork()` + copy-on-write, which
+/// we don't have access to in async Rust.
+///
+/// Returns `+Background append only file rewriting started\r\n` —
+/// matches the Redis-format response. (Today the rewrite happens
+/// synchronously before the response is sent; the message is for
+/// client-compat. A truly async rewrite is a future stage.)
+pub struct BgrewriteaofCommand {
+    /// Persistence handle filled in via `attach_persistence` after
+    /// the server's `with_persistence(...)` step. The registry has to
+    /// receive the command before persistence exists, so we use a
+    /// `OnceLock` slot to wire it up later.
+    persistence:
+        std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::storage::PersistenceManager>>>,
+    barrier: crate::network::server::RewriteBarrier,
+}
+
+impl BgrewriteaofCommand {
+    pub fn new(
+        persistence: std::sync::Arc<
+            std::sync::OnceLock<std::sync::Arc<crate::storage::PersistenceManager>>,
+        >,
+        barrier: crate::network::server::RewriteBarrier,
+    ) -> Self {
+        Self {
+            persistence,
+            barrier,
+        }
+    }
+}
+
+#[async_trait]
+impl Command for BgrewriteaofCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if !args.is_empty() {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'BGREWRITEAOF' command".to_string(),
+            );
+        }
+        let Some(persistence) = self.persistence.get() else {
+            return CommandResult::Error(
+                "ERR persistence (AOF) is not enabled; BGREWRITEAOF has nothing to do".to_string(),
+            );
+        };
+        if !persistence.is_enabled() {
+            return CommandResult::Error(
+                "ERR persistence (AOF) is not enabled; BGREWRITEAOF has nothing to do".to_string(),
+            );
+        }
+
+        // Acquire the rewrite barrier in write mode. This blocks new
+        // mutations from being dispatched until we finish; reads
+        // continue to flow.
+        let _write_guard = self.barrier.write().await;
+
+        // Snapshot the store and render to RESP frames.
+        let snapshot = store.snapshot();
+        let frames = match crate::storage::snapshot_to_frames(&snapshot) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e.to_client_error()),
+        };
+
+        if let Err(e) = persistence.rewrite_aof(frames).await {
+            return CommandResult::Error(e.to_client_error());
+        }
+
+        // Match Redis' canned response so admin tooling that greps for
+        // it (redis-cli's BGREWRITEAOF output) keeps working.
+        CommandResult::Ok(ResponseValue::SimpleString(
+            "Background append only file rewriting started".to_string(),
+        ))
+    }
+
+    fn name(&self) -> &'static str {
+        "BGREWRITEAOF"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(1)
+    }
+
+    /// BGREWRITEAOF must NOT be logged to the AOF — replaying it
+    /// during recovery would re-trigger the rewrite, which is a no-op
+    /// at best and a confusion at worst.
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
 /// `QUIT` — close the connection. Returns `+OK` then the dispatch
 /// layer breaks the per-connection read loop.
 pub struct QuitCommand;
