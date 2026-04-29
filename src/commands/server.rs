@@ -572,9 +572,9 @@ mod tests {
         assert!(!TypeCommand.is_mutation());
     }
 
-    fn extract_bulk(result: &CommandResult) -> &str {
+    fn extract_bulk(result: &CommandResult) -> std::borrow::Cow<'_, str> {
         match result {
-            CommandResult::Ok(ResponseValue::BulkString(Some(s))) => s.as_str(),
+            CommandResult::Ok(ResponseValue::BulkString(Some(s))) => String::from_utf8_lossy(s),
             other => panic!("expected bulk string, got {other:?}"),
         }
     }
@@ -677,7 +677,9 @@ mod tests {
                 let strs: Vec<String> = items
                     .into_iter()
                     .map(|v| match v {
-                        ResponseValue::BulkString(Some(s)) => s,
+                        ResponseValue::BulkString(Some(s)) => {
+                            String::from_utf8_lossy(&s).into_owned()
+                        }
                         _ => panic!(),
                     })
                     .collect();

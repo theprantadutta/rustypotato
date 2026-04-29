@@ -505,8 +505,14 @@ mod tests {
                     }
                 }
 
-                assert_eq!(fields.get("field1"), Some(&"value1".to_string()));
-                assert_eq!(fields.get("field2"), Some(&"value2".to_string()));
+                assert_eq!(
+                    fields.get(&bytes::Bytes::from("field1")),
+                    Some(&bytes::Bytes::from("value1"))
+                );
+                assert_eq!(
+                    fields.get(&bytes::Bytes::from("field2")),
+                    Some(&bytes::Bytes::from("value2"))
+                );
             }
             _ => panic!("Expected array response from HGETALL command"),
         }

@@ -31,7 +31,7 @@ fn simple_string_response() -> impl Strategy<Value = ResponseValue> {
 fn bulk_string_response() -> impl Strategy<Value = ResponseValue> {
     prop_oneof![
         Just(ResponseValue::nil_bulk()),
-        bulk_string_strategy().prop_map(|s| ResponseValue::BulkString(Some(s)))
+        bulk_string_strategy().prop_map(ResponseValue::bulk)
     ]
 }
 
@@ -86,7 +86,7 @@ proptest! {
     #[test]
     fn prop_bulk_string_encodes(s in bulk_string_strategy()) {
         let mut codec = RespCodec::new();
-        let response = ResponseValue::BulkString(Some(s.clone()));
+        let response = ResponseValue::bulk(s.clone());
 
         let encoded = codec.encode(&response).unwrap();
 
@@ -210,7 +210,7 @@ proptest! {
     fn prop_long_bulk_string_length(len in 0usize..10000) {
         let s: String = (0..len).map(|_| 'x').collect();
         let mut codec = RespCodec::new();
-        let response = ResponseValue::BulkString(Some(s.clone()));
+        let response = ResponseValue::bulk(s.clone());
 
         let encoded = codec.encode(&response).unwrap();
 

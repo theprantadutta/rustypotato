@@ -23,23 +23,27 @@ pub use server::{
 pub use string::{DelCommand, ExistsCommand, GetCommand, SetCommand};
 pub use ttl::{ExpireCommand, TtlCommand};
 
+use bytes::Bytes;
+
 /// Command execution result types.
+///
+/// `BulkString` carries `Bytes` (not `String`) so that arbitrary-byte
+/// values flow through the RESP write path without being squeezed
+/// through UTF-8. Construct via `ResponseValue::bulk(s)` (which accepts
+/// `&str`, `String`, `Vec<u8>`, or `Bytes`) and `nil_bulk()` for `$-1`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResponseValue {
     SimpleString(String),
-    BulkString(Option<String>),
+    BulkString(Option<Bytes>),
     Integer(i64),
     Array(Vec<ResponseValue>),
     Nil,
 }
 
 impl ResponseValue {
-    /// Construct a non-nil bulk string from anything that can be turned
-    /// into a `String`. Migration helper for the upcoming binary-safe
-    /// rework where this type will become `Option<Bytes>` — written this
-    /// way today so call sites can switch to the helper now and the
-    /// underlying type swap becomes a one-line change later.
-    pub fn bulk(s: impl Into<String>) -> Self {
+    /// Construct a non-nil bulk string from anything convertible into
+    /// `Bytes`. Accepts `&str`, `String`, `Vec<u8>`, `&[u8]`, `Bytes`.
+    pub fn bulk(s: impl Into<Bytes>) -> Self {
         Self::BulkString(Some(s.into()))
     }
 

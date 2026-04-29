@@ -176,7 +176,9 @@ impl CliClient {
     fn convert_resp_to_response(resp_value: crate::network::protocol::RespValue) -> ResponseValue {
         match resp_value {
             crate::network::protocol::RespValue::SimpleString(s) => ResponseValue::SimpleString(s),
-            crate::network::protocol::RespValue::BulkString(s) => ResponseValue::BulkString(s),
+            crate::network::protocol::RespValue::BulkString(s) => {
+                ResponseValue::BulkString(s.map(bytes::Bytes::from))
+            }
             crate::network::protocol::RespValue::Integer(i) => ResponseValue::Integer(i),
             crate::network::protocol::RespValue::Array(arr) => {
                 let converted_arr: Vec<ResponseValue> = arr
@@ -196,7 +198,7 @@ impl CliClient {
     pub fn format_response(response: &ResponseValue) -> String {
         match response {
             ResponseValue::SimpleString(s) => s.clone(),
-            ResponseValue::BulkString(Some(s)) => s.clone(),
+            ResponseValue::BulkString(Some(s)) => String::from_utf8_lossy(s).into_owned(),
             ResponseValue::BulkString(None) | ResponseValue::Nil => "(nil)".to_string(),
             ResponseValue::Integer(i) => format!("(integer) {i}"),
             ResponseValue::Array(arr) => {

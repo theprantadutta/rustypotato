@@ -149,7 +149,7 @@ impl RespCodec {
                 self.buffer
                     .extend_from_slice(s.len().to_string().as_bytes());
                 self.buffer.extend_from_slice(b"\r\n");
-                self.buffer.extend_from_slice(s.as_bytes());
+                self.buffer.extend_from_slice(&s[..]);
                 self.buffer.extend_from_slice(b"\r\n");
             }
             ResponseValue::BulkString(None) | ResponseValue::Nil => {

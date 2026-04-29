@@ -552,7 +552,8 @@ mod concurrent_command_tests {
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
-                assert_eq!(v.parse::<i64>().unwrap(), 100);
+                let s = std::str::from_utf8(&v).unwrap();
+                assert_eq!(s.parse::<i64>().unwrap(), 100);
             }
             _ => panic!("Expected counter to be 100"),
         }
