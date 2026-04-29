@@ -1,6 +1,5 @@
 //! Server-level commands that don't touch storage state directly:
-//! PING, ECHO, DBSIZE, TYPE, FLUSHDB, INFO and (in subsequent
-//! stages) COMMAND, KEYS, QUIT.
+//! PING, ECHO, DBSIZE, TYPE, FLUSHDB, INFO, KEYS, COMMAND, QUIT.
 
 use crate::commands::registry::Args;
 use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseValue};
@@ -420,6 +419,113 @@ fn match_class(p: &[u8], c: u8) -> Option<(usize, bool)> {
     Some((i + 1, matched ^ negate))
 }
 
+/// `COMMAND [COUNT | DOCS [name ...] | LIST | INFO [name ...]]` — minimal
+/// stub that real `redis-cli` clients use to check connectivity and
+/// fetch the command catalog at startup.
+///
+/// We support:
+/// - `COMMAND COUNT` → integer count of registered commands.
+/// - `COMMAND` (no subcommand) → empty array. Redis returns a full
+///   command introspection array; an empty array is malformed but
+///   doesn't break clients that use it as a smoke check.
+/// - `COMMAND LIST` → array of command name simple strings.
+/// - `COMMAND DOCS [name ...]` → empty array (clients that use
+///   DOCS for tab-completion fall back to a built-in default).
+/// - `COMMAND INFO [name ...]` → empty array (same fallback).
+///
+/// The count is captured at registration time and stored in the
+/// command struct, since the trait can't see the registry.
+pub struct CommandCommand {
+    total: usize,
+}
+
+impl CommandCommand {
+    /// Construct with the total number of commands the registry will
+    /// hold *including* this one. The lib registers all other
+    /// commands first, reads `command_count()`, and constructs this
+    /// with `count + 1`.
+    pub fn new(total: usize) -> Self {
+        Self { total }
+    }
+}
+
+#[async_trait]
+impl Command for CommandCommand {
+    async fn execute(&self, args: Args<'_>, _store: &MemoryStore) -> CommandResult {
+        if args.is_empty() {
+            // Redis would return a full nested array describing every
+            // command; we return an empty array. Clients using this as
+            // a sanity check accept it.
+            return CommandResult::Ok(ResponseValue::Array(Vec::new()));
+        }
+
+        let sub = match arg_str(args, 0) {
+            Ok(s) => s.to_ascii_uppercase(),
+            Err(e) => return CommandResult::Error(e),
+        };
+
+        match sub.as_str() {
+            "COUNT" => CommandResult::Ok(ResponseValue::Integer(self.total as i64)),
+            "LIST" => {
+                // Stage 7 stub: we don't track names from inside the
+                // command. Return an empty array; future versions can
+                // wire the registry through.
+                CommandResult::Ok(ResponseValue::Array(Vec::new()))
+            }
+            "DOCS" | "INFO" => CommandResult::Ok(ResponseValue::Array(Vec::new())),
+            other => CommandResult::Error(format!(
+                "ERR unknown subcommand or wrong number of arguments for '{}'",
+                other.to_ascii_lowercase()
+            )),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "COMMAND"
+    }
+
+    fn arity(&self) -> CommandArity {
+        // COMMAND alone, or COMMAND <sub> [args...]; cap is generous.
+        CommandArity::AtLeast(1)
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
+/// `QUIT` — close the connection. Returns `+OK` then the dispatch
+/// layer breaks the per-connection read loop.
+pub struct QuitCommand;
+
+#[async_trait]
+impl Command for QuitCommand {
+    async fn execute(&self, args: Args<'_>, _store: &MemoryStore) -> CommandResult {
+        if !args.is_empty() {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'QUIT' command".to_string(),
+            );
+        }
+        CommandResult::Ok(ResponseValue::SimpleString("OK".to_string()))
+    }
+
+    fn name(&self) -> &'static str {
+        "QUIT"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(1)
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+
+    fn is_terminal(&self) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,5 +900,99 @@ mod tests {
     #[tokio::test]
     async fn keys_is_not_a_mutation() {
         assert!(!KeysCommand.is_mutation());
+    }
+
+    // COMMAND / QUIT tests (Stage 7 partial 6)
+
+    #[tokio::test]
+    async fn command_no_args_returns_empty_array() {
+        let store = MemoryStore::new();
+        let cmd = CommandCommand::new(32);
+        let result = cmd.execute(&[], &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => assert!(items.is_empty()),
+            other => panic!("expected empty array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn command_count_returns_total() {
+        let store = MemoryStore::new();
+        let cmd = CommandCommand::new(32);
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"COUNT")], &store)
+            .await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(32)));
+    }
+
+    #[tokio::test]
+    async fn command_count_lowercase_subcommand_accepted() {
+        let store = MemoryStore::new();
+        let cmd = CommandCommand::new(15);
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"count")], &store)
+            .await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(15)));
+    }
+
+    #[tokio::test]
+    async fn command_docs_returns_empty_array() {
+        let store = MemoryStore::new();
+        let cmd = CommandCommand::new(32);
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"DOCS")], &store)
+            .await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => assert!(items.is_empty()),
+            other => panic!("expected empty array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn command_unknown_subcommand_errors() {
+        let store = MemoryStore::new();
+        let cmd = CommandCommand::new(32);
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"BOGUS")], &store)
+            .await;
+        match result {
+            CommandResult::Error(msg) => assert!(msg.contains("unknown subcommand"), "{msg}"),
+            _ => panic!("expected error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn command_is_read_only() {
+        assert!(!CommandCommand::new(0).is_mutation());
+        assert!(!CommandCommand::new(0).is_terminal());
+    }
+
+    #[tokio::test]
+    async fn quit_returns_ok() {
+        let store = MemoryStore::new();
+        let cmd = QuitCommand;
+        let result = cmd.execute(&[], &store).await;
+        assert_eq!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString("OK".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn quit_with_args_errors() {
+        let store = MemoryStore::new();
+        let cmd = QuitCommand;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"extra")], &store)
+            .await;
+        assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn quit_is_terminal_and_read_only() {
+        // QUIT must signal terminal so the dispatch loop closes the
+        // connection after sending the response.
+        assert!(QuitCommand.is_terminal());
+        assert!(!QuitCommand.is_mutation());
     }
 }

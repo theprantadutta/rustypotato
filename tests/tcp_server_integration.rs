@@ -4,7 +4,7 @@
 //! connection handling, command processing, and graceful shutdown.
 
 use rustypotato::{
-    commands::{CommandRegistry, DelCommand, ExistsCommand, GetCommand, SetCommand},
+    commands::{CommandRegistry, DelCommand, ExistsCommand, GetCommand, QuitCommand, SetCommand},
     config::Config,
     network::TcpServer,
     storage::MemoryStore,
@@ -30,6 +30,7 @@ async fn create_and_start_test_server() -> (TcpServer, std::net::SocketAddr) {
     command_registry.register(Box::new(GetCommand));
     command_registry.register(Box::new(DelCommand));
     command_registry.register(Box::new(ExistsCommand));
+    command_registry.register(Box::new(QuitCommand));
 
     let command_registry = Arc::new(command_registry);
     let mut server = TcpServer::new(config.clone(), storage, command_registry);
@@ -516,5 +517,36 @@ async fn test_server_binary_safe_set_get() {
     assert_eq!(response, expected, "binary value did not round-trip");
 
     drop(stream);
+    server.shutdown().await.unwrap();
+}
+
+/// Stage 7 partial 6: QUIT must close the connection after sending +OK.
+///
+/// Verifies:
+/// 1. Sending QUIT yields +OK\r\n.
+/// 2. The next read on the same socket returns EOF (n == 0).
+#[tokio::test]
+async fn test_server_quit_closes_connection() {
+    let (server, addr) = create_and_start_test_server().await;
+
+    let mut stream = TcpStream::connect(addr)
+        .await
+        .expect("Failed to connect to server");
+
+    // Send QUIT and read the +OK response.
+    let response = send_command(&mut stream, b"*1\r\n$4\r\nQUIT\r\n")
+        .await
+        .expect("Failed to send QUIT");
+    assert_eq!(&response[..], b"+OK\r\n", "expected +OK from QUIT");
+
+    // Subsequent read should return 0 bytes (EOF) within a short window —
+    // the server flushed the response and dropped the connection.
+    let mut sink = [0u8; 16];
+    let n = timeout(Duration::from_secs(2), stream.read(&mut sink))
+        .await
+        .expect("read after QUIT timed out — server didn't close")
+        .expect("read after QUIT errored");
+    assert_eq!(n, 0, "expected EOF after QUIT, got {n} bytes");
+
     server.shutdown().await.unwrap();
 }

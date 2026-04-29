@@ -33,6 +33,13 @@ pub trait Command: Send + Sync {
     fn is_mutation(&self) -> bool {
         true
     }
+
+    /// Whether the connection should be closed after this command is
+    /// dispatched (and its response sent). Currently only `QUIT`
+    /// returns true. Defaults to false.
+    fn is_terminal(&self) -> bool {
+        false
+    }
 }
 
 /// Command execution result
@@ -188,6 +195,15 @@ impl CommandRegistry {
         self.commands
             .get(&name.to_uppercase())
             .map(|cmd| cmd.is_mutation())
+            .unwrap_or(false)
+    }
+
+    /// Whether the connection should close after this command runs.
+    /// Returns `false` for unknown commands.
+    pub fn is_terminal(&self, name: &str) -> bool {
+        self.commands
+            .get(&name.to_uppercase())
+            .map(|cmd| cmd.is_terminal())
             .unwrap_or(false)
     }
 }

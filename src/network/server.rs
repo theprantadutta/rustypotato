@@ -527,13 +527,21 @@ impl TcpServer {
                                 &metrics,
                                 persistence.as_ref(),
                             ).await {
-                                Ok(processed_count) => {
+                                Ok((processed_count, should_close)) => {
                                     commands_processed += processed_count;
 
                                     // Log periodic statistics for active connections
                                     if commands_processed.is_multiple_of(1000) {
                                         debug!("Client {} from {} has processed {} commands in {:?}",
                                                client_id, remote_addr, commands_processed, connection_start.elapsed());
+                                    }
+
+                                    if should_close {
+                                        debug!(
+                                            "Client {} from {} sent QUIT after {} commands; closing connection",
+                                            client_id, remote_addr, commands_processed
+                                        );
+                                        break;
                                     }
                                 }
                                 Err(e) => {
@@ -604,8 +612,12 @@ impl TcpServer {
         Ok(())
     }
 
-    /// Process data in the buffer and execute commands
-    /// Returns the number of commands successfully processed
+    /// Process data in the buffer and execute commands.
+    ///
+    /// Returns `(processed_count, should_close)`. `should_close` is set
+    /// when a terminal command (currently only `QUIT`) was successfully
+    /// dispatched in this batch — the caller breaks the connection
+    /// loop after the response is sent.
     #[allow(clippy::too_many_arguments)]
     async fn process_buffer(
         codec: &mut RespCodec,
@@ -616,8 +628,9 @@ impl TcpServer {
         config: &Config,
         metrics: &MetricsCollector,
         persistence: Option<&Arc<PersistenceManager>>,
-    ) -> Result<u64> {
+    ) -> Result<(u64, bool)> {
         let mut commands_processed = 0u64;
+        let mut should_close = false;
 
         // Try to decode commands from the buffer
         while !buffer.is_empty() {
@@ -680,6 +693,11 @@ impl TcpServer {
                         }
                     }
 
+                    // Capture the terminal flag before `result` is moved
+                    // into send_response — we only act on it after the
+                    // response is successfully written.
+                    let is_terminal = command_registry.is_terminal(&command.name);
+
                     // Send response
                     match Self::send_response(connection, result, config, metrics).await {
                         Ok(()) => {
@@ -688,6 +706,13 @@ impl TcpServer {
                                 "Successfully processed command '{}' for client {} in {:?}",
                                 command.name, client_id, command_duration
                             );
+                            if is_terminal {
+                                // QUIT: break out of the parse loop so
+                                // the caller closes the connection.
+                                should_close = true;
+                                buffer.clear();
+                                break;
+                            }
                         }
                         Err(e) => {
                             error!(
@@ -739,7 +764,7 @@ impl TcpServer {
             }
         }
 
-        Ok(commands_processed)
+        Ok((commands_processed, should_close))
     }
 
     /// Send a command result as a response

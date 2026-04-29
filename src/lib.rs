@@ -34,11 +34,11 @@ pub use storage::{replay_aof_file, MemoryStore, PersistenceManager, StoredValue,
 
 use crate::network::ConnectionPool;
 use commands::{
-    DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand, ExpireCommand,
-    ExpireatCommand, FlushdbCommand, GetCommand, HdelCommand, HexistsCommand, HgetCommand,
-    HgetallCommand, HkeysCommand, HlenCommand, HmgetCommand, HsetCommand, HvalsCommand,
-    IncrCommand, InfoCommand, KeysCommand, MgetCommand, MsetCommand, PexpireCommand,
-    PexpireatCommand, PingCommand, PttlCommand, SetCommand, TtlCommand, TypeCommand,
+    CommandCommand, DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand,
+    ExpireCommand, ExpireatCommand, FlushdbCommand, GetCommand, HdelCommand, HexistsCommand,
+    HgetCommand, HgetallCommand, HkeysCommand, HlenCommand, HmgetCommand, HsetCommand,
+    HvalsCommand, IncrCommand, InfoCommand, KeysCommand, MgetCommand, MsetCommand, PexpireCommand,
+    PexpireatCommand, PingCommand, PttlCommand, QuitCommand, SetCommand, TtlCommand, TypeCommand,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -131,6 +131,15 @@ impl RustyPotatoServer {
         // Register batch string ops (Stage 7 partial 5)
         command_registry.register(Box::new(MgetCommand));
         command_registry.register(Box::new(MsetCommand));
+
+        // QUIT closes the connection cleanly. Registered before
+        // COMMAND so COMMAND COUNT sees a stable total.
+        command_registry.register(Box::new(QuitCommand));
+
+        // COMMAND must go last — it carries the total count, which
+        // includes itself.
+        let total_with_command = command_registry.command_count() + 1;
+        command_registry.register(Box::new(CommandCommand::new(total_with_command)));
 
         let command_registry = Arc::new(command_registry);
 
@@ -384,7 +393,8 @@ mod tests {
         // + HMGET/HKEYS/HVALS/HLEN (Stage 8 partial 3) = 24
         // + MGET/MSET (Stage 7 partial 5) = 26
         // + PTTL/PEXPIRE/EXPIREAT/PEXPIREAT (Stage 8 partial 4) = 30
-        assert_eq!(stats.registered_commands, 30);
+        // + QUIT/COMMAND (Stage 7 partial 6) = 32
+        assert_eq!(stats.registered_commands, 32);
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -407,7 +417,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 30);
+        assert_eq!(server.command_registry().command_count(), 32);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));
@@ -424,6 +434,8 @@ mod tests {
         assert!(server.command_registry().has_command("PEXPIREAT"));
         assert!(server.command_registry().has_command("PING"));
         assert!(server.command_registry().has_command("ECHO"));
+        assert!(server.command_registry().has_command("COMMAND"));
+        assert!(server.command_registry().has_command("QUIT"));
     }
 
     #[tokio::test]
