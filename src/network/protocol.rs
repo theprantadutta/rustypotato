@@ -102,6 +102,40 @@ impl RespCodec {
         self.try_parse_command_with_frame()
     }
 
+    /// Decode a single arbitrary RESP value (`+OK`, `:42`, `$5\r\nhello\r\n`,
+    /// `*N\r\n…`). Used by clients (the CLI, test code) that need to
+    /// parse server *responses* rather than client commands.
+    ///
+    /// Returns `Ok(None)` when more data is needed, `Ok(Some(value))`
+    /// once a complete frame is consumed, and `Err` on malformed input.
+    /// Honors `max_buffer_size`.
+    pub fn decode_resp_value(&mut self, data: &[u8]) -> Result<Option<RespValue>> {
+        if self.buffer.len().saturating_add(data.len()) > self.limits.max_buffer_size {
+            return Err(RustyPotatoError::ProtocolError {
+                message: format!(
+                    "buffer overflow (>{} bytes); closing connection",
+                    self.limits.max_buffer_size
+                ),
+                command: None,
+                source: None,
+            });
+        }
+        self.buffer.extend_from_slice(data);
+
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
+        let mut cursor = Cursor::new(&self.buffer[..]);
+        match self.parse_resp_value(&mut cursor)? {
+            Some(value) => {
+                let consumed = cursor.position() as usize;
+                self.buffer.advance(consumed);
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Encode a single ResponseValue
     fn encode_value(&mut self, value: &ResponseValue) -> Result<()> {
         match value {

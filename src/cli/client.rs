@@ -3,7 +3,6 @@
 use crate::commands::ResponseValue;
 use crate::error::{Result, RustyPotatoError};
 use crate::network::protocol::RespCodec;
-use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
@@ -128,287 +127,49 @@ impl CliClient {
             })
     }
 
-    /// Read and parse response from server
+    /// Read and parse response from server using the canonical
+    /// `RespCodec`. The previous implementation hand-rolled a parallel
+    /// RESP parser (~200 lines) which is now collapsed into the same
+    /// codec the server uses for command parsing.
     async fn read_response(&mut self) -> Result<ResponseValue> {
-        let mut buffer = BytesMut::with_capacity(4096);
-
+        let mut chunk = [0u8; 1024];
         loop {
-            // Read data from stream
-            let mut temp_buffer = [0u8; 1024];
-            let bytes_read = {
-                let stream = self.stream.as_mut().unwrap();
-                match stream.read(&mut temp_buffer).await {
-                    Ok(0) => {
-                        return Err(RustyPotatoError::ConnectionError {
-                            message: "Connection closed by server".to_string(),
-                            connection_id: None,
-                            source: None,
-                        });
-                    }
-                    Ok(n) => n,
-                    Err(e) => {
-                        error!("Failed to read response: {}", e);
-                        return Err(RustyPotatoError::NetworkError {
-                            message: format!("Failed to read response: {e}"),
-                            source: Some(Box::new(e)),
-                            connection_id: None,
-                        });
-                    }
+            // Try to drain any frame already buffered in the codec
+            // before issuing another read — handles the pipelined case
+            // where one syscall returned multiple responses.
+            if let Some(value) = self.codec.decode_resp_value(&[])? {
+                debug!("Received response: {:?}", value);
+                return Ok(Self::convert_resp_to_response(value));
+            }
+
+            let stream = self.stream.as_mut().unwrap();
+            let n = match stream.read(&mut chunk).await {
+                Ok(0) => {
+                    return Err(RustyPotatoError::ConnectionError {
+                        message: "Connection closed by server".to_string(),
+                        connection_id: None,
+                        source: None,
+                    });
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    error!("Failed to read response: {}", e);
+                    return Err(RustyPotatoError::NetworkError {
+                        message: format!("Failed to read response: {e}"),
+                        source: Some(Box::new(e)),
+                        connection_id: None,
+                    });
                 }
             };
 
-            buffer.extend_from_slice(&temp_buffer[..bytes_read]);
-
-            // Try to parse response
-            match self.parse_response(&buffer) {
-                Ok(Some(response)) => {
-                    debug!("Received response: {:?}", response);
-                    return Ok(response);
+            match self.codec.decode_resp_value(&chunk[..n])? {
+                Some(value) => {
+                    debug!("Received response: {:?}", value);
+                    return Ok(Self::convert_resp_to_response(value));
                 }
-                Ok(None) => {
-                    // Need more data, continue reading
-                    continue;
-                }
-                Err(e) => {
-                    error!("Failed to parse response: {}", e);
-                    return Err(e);
-                }
+                None => continue, // need more data
             }
         }
-    }
-
-    /// Parse RESP response from buffer
-    fn parse_response(&self, buffer: &[u8]) -> Result<Option<ResponseValue>> {
-        if buffer.is_empty() {
-            return Ok(None);
-        }
-
-        let mut cursor = std::io::Cursor::new(buffer);
-
-        match self.parse_resp_value(&mut cursor)? {
-            Some(resp_value) => Ok(Some(Self::convert_resp_to_response(resp_value))),
-            None => Ok(None),
-        }
-    }
-
-    /// Parse a single RESP value from cursor
-    fn parse_resp_value(
-        &self,
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Option<crate::network::protocol::RespValue>> {
-        if cursor.position() >= cursor.get_ref().len() as u64 {
-            return Ok(None);
-        }
-
-        let mut type_byte = [0u8; 1];
-        if std::io::Read::read_exact(cursor, &mut type_byte).is_err() {
-            return Ok(None);
-        }
-
-        match type_byte[0] {
-            b'+' => self.parse_simple_string(cursor),
-            b'-' => self.parse_error_response(cursor),
-            b':' => self.parse_integer_response(cursor),
-            b'$' => self.parse_bulk_string_response(cursor),
-            b'*' => self.parse_array_response(cursor),
-            _ => Err(RustyPotatoError::ProtocolError {
-                message: format!("Unknown RESP type: {}", type_byte[0] as char),
-                command: None,
-                source: None,
-            }),
-        }
-    }
-
-    /// Parse simple string response (+OK\r\n)
-    fn parse_simple_string(
-        &self,
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Option<crate::network::protocol::RespValue>> {
-        if let Some(line) = self.read_line(cursor)? {
-            Ok(Some(crate::network::protocol::RespValue::SimpleString(
-                line,
-            )))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Parse error response (-ERR message\r\n)
-    fn parse_error_response(
-        &self,
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Option<crate::network::protocol::RespValue>> {
-        if let Some(line) = self.read_line(cursor)? {
-            Ok(Some(crate::network::protocol::RespValue::Error(line)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Parse integer response (:123\r\n)
-    fn parse_integer_response(
-        &self,
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Option<crate::network::protocol::RespValue>> {
-        if let Some(line) = self.read_line(cursor)? {
-            let value = line
-                .parse::<i64>()
-                .map_err(|_| RustyPotatoError::ProtocolError {
-                    message: format!("Invalid integer: {line}"),
-                    command: None,
-                    source: None,
-                })?;
-            Ok(Some(crate::network::protocol::RespValue::Integer(value)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Parse bulk string response ($5\r\nhello\r\n or $-1\r\n for null)
-    fn parse_bulk_string_response(
-        &self,
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Option<crate::network::protocol::RespValue>> {
-        if let Some(length_str) = self.read_line(cursor)? {
-            let length =
-                length_str
-                    .parse::<i32>()
-                    .map_err(|_| RustyPotatoError::ProtocolError {
-                        message: format!("Invalid bulk string length: {length_str}"),
-                        command: None,
-                        source: None,
-                    })?;
-
-            if length == -1 {
-                return Ok(Some(crate::network::protocol::RespValue::BulkString(None)));
-            }
-
-            if length < 0 {
-                return Err(RustyPotatoError::ProtocolError {
-                    message: format!("Invalid bulk string length: {length}"),
-                    command: None,
-                    source: None,
-                });
-            }
-
-            let length = length as usize;
-
-            // Check if we have enough data
-            let remaining_data = &cursor.get_ref()[(cursor.position() as usize)..];
-            if remaining_data.len() < length + 2 {
-                return Ok(None); // Need more data
-            }
-
-            let mut string_data = vec![0u8; length];
-            std::io::Read::read_exact(cursor, &mut string_data).map_err(|_| {
-                RustyPotatoError::ProtocolError {
-                    message: "Failed to read bulk string data".to_string(),
-                    command: None,
-                    source: None,
-                }
-            })?;
-
-            // Verify \r\n terminator
-            let mut terminator = [0u8; 2];
-            std::io::Read::read_exact(cursor, &mut terminator).map_err(|_| {
-                RustyPotatoError::ProtocolError {
-                    message: "Failed to read bulk string terminator".to_string(),
-                    command: None,
-                    source: None,
-                }
-            })?;
-
-            if terminator != [b'\r', b'\n'] {
-                return Err(RustyPotatoError::ProtocolError {
-                    message: "Missing \\r\\n terminator for bulk string".to_string(),
-                    command: None,
-                    source: None,
-                });
-            }
-
-            let string =
-                String::from_utf8(string_data).map_err(|_| RustyPotatoError::ProtocolError {
-                    message: "Invalid UTF-8 in bulk string".to_string(),
-                    command: None,
-                    source: None,
-                })?;
-
-            Ok(Some(crate::network::protocol::RespValue::BulkString(Some(
-                string,
-            ))))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Parse array response (*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n)
-    fn parse_array_response(
-        &self,
-        cursor: &mut std::io::Cursor<&[u8]>,
-    ) -> Result<Option<crate::network::protocol::RespValue>> {
-        if let Some(length_str) = self.read_line(cursor)? {
-            let length =
-                length_str
-                    .parse::<i32>()
-                    .map_err(|_| RustyPotatoError::ProtocolError {
-                        message: format!("Invalid array length: {length_str}"),
-                        command: None,
-                        source: None,
-                    })?;
-
-            if length == -1 {
-                return Ok(Some(crate::network::protocol::RespValue::Array(vec![])));
-            }
-
-            if length < 0 {
-                return Err(RustyPotatoError::ProtocolError {
-                    message: format!("Invalid array length: {length}"),
-                    command: None,
-                    source: None,
-                });
-            }
-
-            let length = length as usize;
-            let mut elements = Vec::with_capacity(length);
-
-            for _ in 0..length {
-                if let Some(element) = self.parse_resp_value(cursor)? {
-                    elements.push(element);
-                } else {
-                    return Ok(None); // Need more data
-                }
-            }
-
-            Ok(Some(crate::network::protocol::RespValue::Array(elements)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Read a line terminated by \r\n
-    fn read_line(&self, cursor: &mut std::io::Cursor<&[u8]>) -> Result<Option<String>> {
-        let start_pos = cursor.position() as usize;
-        let data = cursor.get_ref();
-
-        // Look for \r\n
-        for i in start_pos..data.len().saturating_sub(1) {
-            if data[i] == b'\r' && data[i + 1] == b'\n' {
-                let line_data = &data[start_pos..i];
-                cursor.set_position((i + 2) as u64);
-
-                let line = String::from_utf8(line_data.to_vec()).map_err(|_| {
-                    RustyPotatoError::ProtocolError {
-                        message: "Invalid UTF-8 in line".to_string(),
-                        command: None,
-                        source: None,
-                    }
-                })?;
-
-                return Ok(Some(line));
-            }
-        }
-
-        Ok(None) // No complete line found
     }
 
     /// Convert RespValue to ResponseValue
