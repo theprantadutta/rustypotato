@@ -15,7 +15,10 @@ pub mod ttl;
 mod integration_tests;
 
 pub use atomic::{DecrCommand, IncrCommand};
-pub use hash::{HdelCommand, HexistsCommand, HgetCommand, HgetallCommand, HsetCommand};
+pub use hash::{
+    HdelCommand, HexistsCommand, HgetCommand, HgetallCommand, HkeysCommand, HlenCommand,
+    HmgetCommand, HsetCommand, HvalsCommand,
+};
 pub use registry::{Command, CommandRegistry, CommandResult, ParsedCommand};
 pub use server::{
     DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand, KeysCommand, PingCommand, TypeCommand,

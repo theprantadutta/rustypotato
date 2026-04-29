@@ -5,39 +5,54 @@ use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseVal
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
 
-/// HSET command implementation
-/// Sets field in the hash stored at key to value
+/// HSET command implementation.
+///
+/// Variadic per Redis 4+: `HSET key field value [field value ...]`.
+/// Returns the count of newly created fields (existing fields that
+/// were updated do not increment the count). Real clients (e.g.
+/// `redis-py.hset(mapping=...)`) emit the multi-pair form, so the
+/// non-variadic form is a real-world incompatibility, not a curiosity.
 pub struct HsetCommand;
 
 #[async_trait]
 impl Command for HsetCommand {
     async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
-        if args.len() != 3 {
+        // Need key + at least one (field, value) pair, and pairs must
+        // be balanced.
+        if args.len() < 3 || !(args.len() - 1).is_multiple_of(2) {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'HSET' command".to_string(),
             );
         }
 
         let key = match arg_str(args, 0) {
-            Ok(k) => k,
-            Err(e) => return CommandResult::Error(e),
-        };
-        let field = match arg_str(args, 1) {
-            Ok(f) => f,
-            Err(e) => return CommandResult::Error(e),
-        };
-        let value = match arg_str(args, 2) {
-            Ok(v) => v,
+            Ok(k) => k.to_string(),
             Err(e) => return CommandResult::Error(e),
         };
 
-        match store.hset(key, field, value).await {
-            Ok(is_new_field) => {
-                // Return 1 if new field, 0 if field was updated
-                CommandResult::Ok(ResponseValue::Integer(if is_new_field { 1 } else { 0 }))
+        let mut new_fields = 0i64;
+        let mut i = 1;
+        while i < args.len() {
+            let field = match arg_str(args, i) {
+                Ok(f) => f,
+                Err(e) => return CommandResult::Error(e),
+            };
+            let value = match arg_str(args, i + 1) {
+                Ok(v) => v,
+                Err(e) => return CommandResult::Error(e),
+            };
+            match store.hset(key.as_str(), field, value).await {
+                Ok(is_new_field) => {
+                    if is_new_field {
+                        new_fields += 1;
+                    }
+                }
+                Err(e) => return CommandResult::Error(e.to_client_error()),
             }
-            Err(e) => CommandResult::Error(e.to_client_error()),
+            i += 2;
         }
+
+        CommandResult::Ok(ResponseValue::Integer(new_fields))
     }
 
     fn name(&self) -> &'static str {
@@ -45,7 +60,10 @@ impl Command for HsetCommand {
     }
 
     fn arity(&self) -> CommandArity {
-        CommandArity::Fixed(4) // HSET key field value
+        // HSET key field value [field value ...] — at least 4 args
+        // (cmd + key + 1 pair); pair-count balance is checked in
+        // `execute` since `CommandArity` can't express "must be even".
+        CommandArity::AtLeast(4)
     }
 }
 
@@ -179,6 +197,168 @@ impl Command for HgetallCommand {
     }
 }
 
+/// `HMGET key field [field ...]` — return an array containing the
+/// values for each field, or nil for missing fields. If the key
+/// itself is missing, returns an array of nils of the same length as
+/// the field list (matches Redis).
+pub struct HmgetCommand;
+
+#[async_trait]
+impl Command for HmgetCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() < 2 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'HMGET' command".to_string(),
+            );
+        }
+
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+
+        let mut out: Vec<ResponseValue> = Vec::with_capacity(args.len() - 1);
+        for i in 1..args.len() {
+            let field = match arg_str(args, i) {
+                Ok(f) => f,
+                Err(e) => return CommandResult::Error(e),
+            };
+            match store.hget(key, field).await {
+                Ok(Some(v)) => out.push(ResponseValue::bulk(v)),
+                Ok(None) => out.push(ResponseValue::nil_bulk()),
+                Err(e) => return CommandResult::Error(e.to_client_error()),
+            }
+        }
+        CommandResult::Ok(ResponseValue::Array(out))
+    }
+
+    fn name(&self) -> &'static str {
+        "HMGET"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::AtLeast(3) // HMGET key field [field ...]
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
+/// `HKEYS key` — array of all field names in the hash.
+pub struct HkeysCommand;
+
+#[async_trait]
+impl Command for HkeysCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() != 1 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'HKEYS' command".to_string(),
+            );
+        }
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        match store.hgetall(key).await {
+            Ok(fields) => {
+                let out: Vec<ResponseValue> = fields
+                    .into_iter()
+                    .map(|(field, _)| ResponseValue::bulk(field))
+                    .collect();
+                CommandResult::Ok(ResponseValue::Array(out))
+            }
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "HKEYS"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(2)
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
+/// `HVALS key` — array of all values in the hash.
+pub struct HvalsCommand;
+
+#[async_trait]
+impl Command for HvalsCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() != 1 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'HVALS' command".to_string(),
+            );
+        }
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        match store.hgetall(key).await {
+            Ok(fields) => {
+                let out: Vec<ResponseValue> = fields
+                    .into_iter()
+                    .map(|(_, value)| ResponseValue::bulk(value))
+                    .collect();
+                CommandResult::Ok(ResponseValue::Array(out))
+            }
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "HVALS"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(2)
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
+/// `HLEN key` — integer count of fields in the hash, 0 if missing.
+pub struct HlenCommand;
+
+#[async_trait]
+impl Command for HlenCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() != 1 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'HLEN' command".to_string(),
+            );
+        }
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        match store.hgetall(key).await {
+            Ok(fields) => CommandResult::Ok(ResponseValue::Integer(fields.len() as i64)),
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "HLEN"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(2)
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
 /// HEXISTS command implementation
 /// Determines if a hash field exists
 pub struct HexistsCommand;
@@ -298,7 +478,7 @@ mod tests {
         let store = create_test_store();
         let cmd = HsetCommand;
 
-        // Too few arguments
+        // Too few arguments (just the key)
         let args = vec![
             bytes::Bytes::from_static(b"myhash"),
             bytes::Bytes::from_static(b"field1"),
@@ -306,22 +486,57 @@ mod tests {
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
-        // Too many arguments
+        // Unbalanced field/value count (key + 2 fields, only 1 value)
         let args = vec![
             bytes::Bytes::from_static(b"myhash"),
             bytes::Bytes::from_static(b"field1"),
             bytes::Bytes::from_static(b"value1"),
-            bytes::Bytes::from_static(b"extra"),
+            bytes::Bytes::from_static(b"orphan_field"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn test_hset_command_variadic_pairs() {
+        // Stage 8: HSET key f1 v1 f2 v2 f3 v3 — returns count of NEW fields.
+        let store = create_test_store();
+        let cmd = HsetCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"h"),
+            bytes::Bytes::from_static(b"a"),
+            bytes::Bytes::from_static(b"1"),
+            bytes::Bytes::from_static(b"b"),
+            bytes::Bytes::from_static(b"2"),
+            bytes::Bytes::from_static(b"c"),
+            bytes::Bytes::from_static(b"3"),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(3)));
+
+        assert_eq!(store.hget("h", "a").await.unwrap(), Some("1".to_string()));
+        assert_eq!(store.hget("h", "b").await.unwrap(), Some("2".to_string()));
+        assert_eq!(store.hget("h", "c").await.unwrap(), Some("3".to_string()));
+
+        // Re-running with one new field and two updates returns 1.
+        let args = vec![
+            bytes::Bytes::from_static(b"h"),
+            bytes::Bytes::from_static(b"a"),
+            bytes::Bytes::from_static(b"X"),
+            bytes::Bytes::from_static(b"d"),
+            bytes::Bytes::from_static(b"4"),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(1)));
+        assert_eq!(store.hget("h", "a").await.unwrap(), Some("X".to_string()));
     }
 
     #[test]
     fn test_hset_command_properties() {
         let cmd = HsetCommand;
         assert_eq!(cmd.name(), "HSET");
-        assert_eq!(cmd.arity(), CommandArity::Fixed(4));
+        // Stage 8: variadic — at least cmd + key + 1 (field, value) pair.
+        assert_eq!(cmd.arity(), CommandArity::AtLeast(4));
     }
 
     // HGET command tests
@@ -896,5 +1111,170 @@ mod tests {
             )
             .await;
         assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    // HMGET / HKEYS / HVALS / HLEN tests (Stage 8 partial 3)
+
+    #[tokio::test]
+    async fn test_hmget_returns_values_with_nil_for_missing() {
+        let store = create_test_store();
+        store.hset("h", "a", "1").await.unwrap();
+        store.hset("h", "b", "2").await.unwrap();
+
+        let cmd = HmgetCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"h"),
+            bytes::Bytes::from_static(b"a"),
+            bytes::Bytes::from_static(b"missing"),
+            bytes::Bytes::from_static(b"b"),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], ResponseValue::bulk("1"));
+                assert_eq!(items[1], ResponseValue::nil_bulk());
+                assert_eq!(items[2], ResponseValue::bulk("2"));
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hmget_missing_key_returns_array_of_nils() {
+        let store = create_test_store();
+        let cmd = HmgetCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"missing"),
+            bytes::Bytes::from_static(b"f1"),
+            bytes::Bytes::from_static(b"f2"),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => {
+                assert_eq!(items.len(), 2);
+                assert!(matches!(items[0], ResponseValue::BulkString(None)));
+                assert!(matches!(items[1], ResponseValue::BulkString(None)));
+            }
+            other => panic!("expected array of nils, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hmget_wrong_args_too_few() {
+        let store = create_test_store();
+        let cmd = HmgetCommand;
+        // Just key, no fields
+        let args = vec![bytes::Bytes::from_static(b"h")];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Error(msg) => assert!(msg.contains("wrong number of arguments")),
+            _ => panic!("expected error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hkeys_returns_field_names() {
+        let store = create_test_store();
+        store.hset("h", "alpha", "1").await.unwrap();
+        store.hset("h", "beta", "2").await.unwrap();
+        store.hset("h", "gamma", "3").await.unwrap();
+
+        let cmd = HkeysCommand;
+        let args = vec![bytes::Bytes::from_static(b"h")];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => {
+                assert_eq!(items.len(), 3);
+                let mut names: Vec<String> = items
+                    .iter()
+                    .map(|v| match v {
+                        ResponseValue::BulkString(Some(b)) => {
+                            String::from_utf8_lossy(b).into_owned()
+                        }
+                        _ => panic!(),
+                    })
+                    .collect();
+                names.sort();
+                assert_eq!(names, vec!["alpha", "beta", "gamma"]);
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hkeys_missing_key_returns_empty_array() {
+        let store = create_test_store();
+        let cmd = HkeysCommand;
+        let args = vec![bytes::Bytes::from_static(b"missing")];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => {
+                assert!(items.is_empty());
+            }
+            other => panic!("expected empty array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hvals_returns_values() {
+        let store = create_test_store();
+        store.hset("h", "a", "alpha").await.unwrap();
+        store.hset("h", "b", "beta").await.unwrap();
+
+        let cmd = HvalsCommand;
+        let args = vec![bytes::Bytes::from_static(b"h")];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Array(items)) => {
+                assert_eq!(items.len(), 2);
+                let mut values: Vec<String> = items
+                    .iter()
+                    .map(|v| match v {
+                        ResponseValue::BulkString(Some(b)) => {
+                            String::from_utf8_lossy(b).into_owned()
+                        }
+                        _ => panic!(),
+                    })
+                    .collect();
+                values.sort();
+                assert_eq!(values, vec!["alpha", "beta"]);
+            }
+            other => panic!("expected array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hlen_returns_field_count() {
+        let store = create_test_store();
+        store.hset("h", "a", "1").await.unwrap();
+        store.hset("h", "b", "2").await.unwrap();
+        store.hset("h", "c", "3").await.unwrap();
+
+        let cmd = HlenCommand;
+        let args = vec![bytes::Bytes::from_static(b"h")];
+        let result = cmd.execute(&args, &store).await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(3)));
+    }
+
+    #[tokio::test]
+    async fn test_hlen_missing_key_returns_zero() {
+        let store = create_test_store();
+        let cmd = HlenCommand;
+        let args = vec![bytes::Bytes::from_static(b"missing")];
+        let result = cmd.execute(&args, &store).await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(0)));
+    }
+
+    #[test]
+    fn test_new_hash_commands_are_read_only() {
+        // Stage 8 partial 3: HMGET/HKEYS/HVALS/HLEN must NOT be logged
+        // to the AOF — they're read-only. HSET (variadic) is still a
+        // mutation.
+        assert!(!HmgetCommand.is_mutation());
+        assert!(!HkeysCommand.is_mutation());
+        assert!(!HvalsCommand.is_mutation());
+        assert!(!HlenCommand.is_mutation());
+        assert!(HsetCommand.is_mutation());
     }
 }
