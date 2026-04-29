@@ -6,6 +6,7 @@
 //! - Hash commands work correctly with arbitrary field counts
 //! - Command results are consistent
 
+use bytes::Bytes;
 use proptest::prelude::*;
 use rustypotato::commands::{
     Command, CommandResult, DecrCommand, DelCommand, ExistsCommand, ExpireCommand, GetCommand,
@@ -15,19 +16,20 @@ use rustypotato::commands::{
 use rustypotato::MemoryStore;
 use std::sync::Arc;
 
-/// Strategy for generating valid Redis keys
-fn key_strategy() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_]{1,50}".prop_map(|s| s)
+/// Strategy for generating valid Redis keys (as `Bytes` since
+/// command args are `Vec<Bytes>` post-Stage-5e).
+fn key_strategy() -> impl Strategy<Value = Bytes> {
+    "[a-zA-Z0-9_]{1,50}".prop_map(Bytes::from)
 }
 
 /// Strategy for generating valid string values
-fn value_strategy() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_\\-\\.]{0,200}".prop_map(|s| s)
+fn value_strategy() -> impl Strategy<Value = Bytes> {
+    "[a-zA-Z0-9_\\-\\.]{0,200}".prop_map(Bytes::from)
 }
 
 /// Strategy for generating hash field names
-fn field_strategy() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_]{1,30}".prop_map(|s| s)
+fn field_strategy() -> impl Strategy<Value = Bytes> {
+    "[a-zA-Z0-9_]{1,30}".prop_map(Bytes::from)
 }
 
 /// Strategy for TTL values
@@ -218,7 +220,7 @@ proptest! {
 
             // Set a non-numeric value
             let set_cmd = SetCommand;
-            set_cmd.execute(&[key.clone(), "not_a_number".to_string()], &store).await;
+            set_cmd.execute(&[key.clone(), bytes::Bytes::from_static(b"not_a_number")], &store).await;
 
             // Try to INCR
             let incr_cmd = IncrCommand;
@@ -419,8 +421,12 @@ proptest! {
             let set_cmd = SetCommand;
             let expire_cmd = ExpireCommand;
 
+            let ttl_arg = Bytes::from(ttl.to_string());
+
             // Expire non-existent key
-            let result1 = expire_cmd.execute(&[key.clone(), ttl.to_string()], &store).await;
+            let result1 = expire_cmd
+                .execute(&[key.clone(), ttl_arg.clone()], &store)
+                .await;
             match result1 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, 0);
@@ -432,7 +438,7 @@ proptest! {
             set_cmd.execute(&[key.clone(), value], &store).await;
 
             // Expire existing key
-            let result2 = expire_cmd.execute(&[key, ttl.to_string()], &store).await;
+            let result2 = expire_cmd.execute(&[key, ttl_arg], &store).await;
             match result2 {
                 CommandResult::Ok(ResponseValue::Integer(v)) => {
                     prop_assert_eq!(v, 1);
@@ -476,7 +482,8 @@ proptest! {
             }
 
             // Set expiration
-            expire_cmd.execute(&[key.clone(), ttl.to_string()], &store).await;
+            let ttl_arg = Bytes::from(ttl.to_string());
+            expire_cmd.execute(&[key.clone(), ttl_arg], &store).await;
 
             // TTL on key with expiration
             let result3 = ttl_cmd.execute(&[key], &store).await;
@@ -513,7 +520,7 @@ proptest! {
 
             // HSET with 2 args (needs 3)
             let hset_cmd = HsetCommand;
-            let result = hset_cmd.execute(&[key.clone(), "field".to_string()], &store).await;
+            let result = hset_cmd.execute(&[key.clone(), bytes::Bytes::from_static(b"field")], &store).await;
             prop_assert!(matches!(result, CommandResult::Error(_)));
 
             Ok(())
@@ -539,7 +546,8 @@ mod concurrent_command_tests {
             handles.push(tokio::spawn(async move {
                 barrier.wait().await;
                 let cmd = IncrCommand;
-                cmd.execute(&["counter".to_string()], &store).await
+                cmd.execute(&[bytes::Bytes::from_static(b"counter")], &store)
+                    .await
             }));
         }
 
@@ -548,7 +556,9 @@ mod concurrent_command_tests {
         }
 
         let get_cmd = GetCommand;
-        let result = get_cmd.execute(&["counter".to_string()], &store).await;
+        let result = get_cmd
+            .execute(&[bytes::Bytes::from_static(b"counter")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
@@ -574,9 +584,9 @@ mod concurrent_command_tests {
                 let cmd = HsetCommand;
                 cmd.execute(
                     &[
-                        "hash".to_string(),
-                        format!("field_{}", i),
-                        format!("value_{}", i),
+                        Bytes::from_static(b"hash"),
+                        Bytes::from(format!("field_{}", i)),
+                        Bytes::from(format!("value_{}", i)),
                     ],
                     &store,
                 )
@@ -590,7 +600,9 @@ mod concurrent_command_tests {
 
         // Verify all 50 fields exist
         let hgetall_cmd = HgetallCommand;
-        let result = hgetall_cmd.execute(&["hash".to_string()], &store).await;
+        let result = hgetall_cmd
+            .execute(&[bytes::Bytes::from_static(b"hash")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Array(arr)) => {

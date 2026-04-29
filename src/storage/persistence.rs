@@ -493,7 +493,7 @@ mod tests {
 
         let mut keys_seen: Vec<String> = vec![];
         let count = replay_aof_file(&aof, |cmd| {
-            keys_seen.push(cmd.args[0].clone());
+            keys_seen.push(String::from_utf8_lossy(&cmd.args[0]).into_owned());
             async { Ok(()) }
         })
         .await

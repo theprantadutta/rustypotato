@@ -85,15 +85,15 @@ mod parsed_command_tests {
 
     #[test]
     fn test_parsed_command_creation() {
-        let cmd = ParsedCommand::new("SET", vec!["key".to_string(), "value".to_string()]);
+        let cmd = ParsedCommand::new("SET", vec![bytes::Bytes::from_static(b"key"), bytes::Bytes::from_static(b"value")]);
         assert_eq!(cmd.name(), "SET");
-        assert_eq!(cmd.args(), &vec!["key".to_string(), "value".to_string()]);
+        assert_eq!(cmd.args(), &vec![bytes::Bytes::from_static(b"key"), bytes::Bytes::from_static(b"value")]);
         assert_eq!(cmd.arg_count(), 2);
     }
 
     #[test]
     fn test_parsed_command_arg_access() {
-        let cmd = ParsedCommand::new("SET", vec!["key".to_string(), "value".to_string()]);
+        let cmd = ParsedCommand::new("SET", vec![bytes::Bytes::from_static(b"key"), bytes::Bytes::from_static(b"value")]);
         
         assert_eq!(cmd.arg(0), Some("key"));
         assert_eq!(cmd.arg(1), Some("value"));
@@ -108,7 +108,7 @@ mod parsed_command_tests {
         assert_eq!(cmd.arg(0), None);
 
         // Single arg
-        let cmd = ParsedCommand::new("GET", vec!["key".to_string()]);
+        let cmd = ParsedCommand::new("GET", vec![bytes::Bytes::from_static(b"key")]);
         assert_eq!(cmd.arg_count(), 1);
         assert_eq!(cmd.arg(0), Some("key"));
         assert_eq!(cmd.arg(1), None);
@@ -139,7 +139,7 @@ mod response_value_tests {
 
         // Array
         let array = ResponseValue::Array(vec![
-            ResponseValue::SimpleString("OK".to_string()),
+            ResponseValue::SimpleString(bytes::Bytes::from_static(b"OK")),
             ResponseValue::Integer(1),
         ]);
         assert!(matches!(array, ResponseValue::Array(_)));
@@ -177,7 +177,7 @@ mod string_command_tests {
         let command = SetCommand;
 
         // Valid SET command
-        let args = vec!["key1".to_string(), "value1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1"), bytes::Bytes::from_static(b"value1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::SimpleString(_))));
 
@@ -186,11 +186,11 @@ mod string_command_tests {
         assert_eq!(stored.value.to_string(), "value1");
 
         // Wrong arity
-        let args = vec!["key1".to_string()]; // Missing value
+        let args = vec![bytes::Bytes::from_static(b"key1")]; // Missing value
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
-        let args = vec!["key1".to_string(), "value1".to_string(), "extra".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1"), bytes::Bytes::from_static(b"value1"), bytes::Bytes::from_static(b"extra")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -201,13 +201,13 @@ mod string_command_tests {
         let command = GetCommand;
 
         // Get non-existent key
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(None))));
 
         // Set a value and get it
         store.set("key1", "value1").await.unwrap();
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(_)))));
 
@@ -223,13 +223,13 @@ mod string_command_tests {
         let command = DelCommand;
 
         // Delete non-existent key
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(0))));
 
         // Set a value and delete it
         store.set("key1", "value1").await.unwrap();
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
@@ -248,13 +248,13 @@ mod string_command_tests {
         let command = ExistsCommand;
 
         // Check non-existent key
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(0))));
 
         // Set a value and check existence
         store.set("key1", "value1").await.unwrap();
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
@@ -277,13 +277,13 @@ mod ttl_command_tests {
         let command = ExpireCommand;
 
         // Expire non-existent key
-        let args = vec!["nonexistent".to_string(), "60".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent"), bytes::Bytes::from_static(b"60")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(0))));
 
         // Set a value and expire it
         store.set("key1", "value1").await.unwrap();
-        let args = vec!["key1".to_string(), "60".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1"), bytes::Bytes::from_static(b"60")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
@@ -292,12 +292,12 @@ mod ttl_command_tests {
         assert!(ttl > 0 && ttl <= 60);
 
         // Invalid TTL value
-        let args = vec!["key1".to_string(), "invalid".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1"), bytes::Bytes::from_static(b"invalid")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Wrong arity
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -308,19 +308,19 @@ mod ttl_command_tests {
         let command = TtlCommand;
 
         // TTL for non-existent key
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(-2))));
 
         // TTL for key without expiration
         store.set("key1", "value1").await.unwrap();
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(-1))));
 
         // TTL for key with expiration
         store.expire("key1", 60).await.unwrap();
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
         let result = command.execute(&args, &store).await;
         if let CommandResult::Ok(ResponseValue::Integer(ttl)) = result {
             assert!(ttl > 0 && ttl <= 60);
@@ -341,7 +341,7 @@ mod ttl_command_tests {
 
         // Zero TTL (should expire immediately)
         store.set("key1", "value1").await.unwrap();
-        let args = vec!["key1".to_string(), "0".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1"), bytes::Bytes::from_static(b"0")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
@@ -351,7 +351,7 @@ mod ttl_command_tests {
 
         // Negative TTL (should be rejected)
         store.set("key2", "value2").await.unwrap();
-        let args = vec!["key2".to_string(), "-1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key2"), bytes::Bytes::from_static(b"-1")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -367,18 +367,18 @@ mod atomic_command_tests {
         let command = IncrCommand;
 
         // INCR on non-existent key
-        let args = vec!["counter".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"counter")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // INCR on existing integer
-        let args = vec!["counter".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"counter")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(2))));
 
         // INCR on string value (should fail)
         store.set("string_key", "not_a_number").await.unwrap();
-        let args = vec!["string_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"string_key")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
@@ -394,18 +394,18 @@ mod atomic_command_tests {
         let command = DecrCommand;
 
         // DECR on non-existent key
-        let args = vec!["counter".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"counter")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(-1))));
 
         // DECR on existing integer
-        let args = vec!["counter".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"counter")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(-2))));
 
         // DECR on string value (should fail)
         store.set("string_key", "not_a_number").await.unwrap();
-        let args = vec!["string_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"string_key")];
         let result = command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
@@ -423,23 +423,23 @@ mod atomic_command_tests {
 
         // Test near max value
         store.set("max_test", i64::MAX - 1).await.unwrap();
-        let args = vec!["max_test".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"max_test")];
         let result = incr_command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(_))));
 
         // Test overflow
-        let args = vec!["max_test".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"max_test")];
         let result = incr_command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Test near min value
         store.set("min_test", i64::MIN + 1).await.unwrap();
-        let args = vec!["min_test".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"min_test")];
         let result = decr_command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(_))));
 
         // Test underflow
-        let args = vec!["min_test".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"min_test")];
         let result = decr_command.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -467,27 +467,27 @@ mod command_integration_tests {
         // Test complete workflow
         
         // 1. SET a value
-        let set_cmd = ParsedCommand::new("SET", vec!["test_key".to_string(), "test_value".to_string()]);
+        let set_cmd = ParsedCommand::new("SET", vec![bytes::Bytes::from_static(b"test_key"), bytes::Bytes::from_static(b"test_value")]);
         let result = registry.execute(&set_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::SimpleString(_))));
 
         // 2. GET the value
-        let get_cmd = ParsedCommand::new("GET", vec!["test_key".to_string()]);
+        let get_cmd = ParsedCommand::new("GET", vec![bytes::Bytes::from_static(b"test_key")]);
         let result = registry.execute(&get_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(_)))));
 
         // 3. Check EXISTS
-        let exists_cmd = ParsedCommand::new("EXISTS", vec!["test_key".to_string()]);
+        let exists_cmd = ParsedCommand::new("EXISTS", vec![bytes::Bytes::from_static(b"test_key")]);
         let result = registry.execute(&exists_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // 4. Set EXPIRE
-        let expire_cmd = ParsedCommand::new("EXPIRE", vec!["test_key".to_string(), "60".to_string()]);
+        let expire_cmd = ParsedCommand::new("EXPIRE", vec![bytes::Bytes::from_static(b"test_key"), bytes::Bytes::from_static(b"60")]);
         let result = registry.execute(&expire_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // 5. Check TTL
-        let ttl_cmd = ParsedCommand::new("TTL", vec!["test_key".to_string()]);
+        let ttl_cmd = ParsedCommand::new("TTL", vec![bytes::Bytes::from_static(b"test_key")]);
         let result = registry.execute(&ttl_cmd, &store).await;
         if let CommandResult::Ok(ResponseValue::Integer(ttl)) = result {
             assert!(ttl > 0 && ttl <= 60);
@@ -496,12 +496,12 @@ mod command_integration_tests {
         }
 
         // 6. DELETE the key
-        let del_cmd = ParsedCommand::new("DEL", vec!["test_key".to_string()]);
+        let del_cmd = ParsedCommand::new("DEL", vec![bytes::Bytes::from_static(b"test_key")]);
         let result = registry.execute(&del_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // 7. Verify key is gone
-        let exists_cmd = ParsedCommand::new("EXISTS", vec!["test_key".to_string()]);
+        let exists_cmd = ParsedCommand::new("EXISTS", vec![bytes::Bytes::from_static(b"test_key")]);
         let result = registry.execute(&exists_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(0))));
     }
@@ -518,22 +518,22 @@ mod command_integration_tests {
         // Test atomic operations workflow
         
         // 1. INCR non-existent key
-        let incr_cmd = ParsedCommand::new("INCR", vec!["counter".to_string()]);
+        let incr_cmd = ParsedCommand::new("INCR", vec![bytes::Bytes::from_static(b"counter")]);
         let result = registry.execute(&incr_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // 2. INCR again
-        let incr_cmd = ParsedCommand::new("INCR", vec!["counter".to_string()]);
+        let incr_cmd = ParsedCommand::new("INCR", vec![bytes::Bytes::from_static(b"counter")]);
         let result = registry.execute(&incr_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(2))));
 
         // 3. DECR
-        let decr_cmd = ParsedCommand::new("DECR", vec!["counter".to_string()]);
+        let decr_cmd = ParsedCommand::new("DECR", vec![bytes::Bytes::from_static(b"counter")]);
         let result = registry.execute(&decr_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(1))));
 
         // 4. GET to verify final value
-        let get_cmd = ParsedCommand::new("GET", vec!["counter".to_string()]);
+        let get_cmd = ParsedCommand::new("GET", vec![bytes::Bytes::from_static(b"counter")]);
         let result = registry.execute(&get_cmd, &store).await;
         if let CommandResult::Ok(ResponseValue::BulkString(Some(value))) = result {
             assert_eq!(value, "1");
@@ -553,12 +553,12 @@ mod command_integration_tests {
         // Test error handling
         
         // 1. SET a string value
-        let set_cmd = ParsedCommand::new("SET", vec!["string_key".to_string(), "not_a_number".to_string()]);
+        let set_cmd = ParsedCommand::new("SET", vec![bytes::Bytes::from_static(b"string_key"), bytes::Bytes::from_static(b"not_a_number")]);
         let result = registry.execute(&set_cmd, &store).await;
         assert!(matches!(result, CommandResult::Ok(_)));
 
         // 2. Try to INCR the string value (should fail)
-        let incr_cmd = ParsedCommand::new("INCR", vec!["string_key".to_string()]);
+        let incr_cmd = ParsedCommand::new("INCR", vec![bytes::Bytes::from_static(b"string_key")]);
         let result = registry.execute(&incr_cmd, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
@@ -601,7 +601,7 @@ mod command_integration_tests {
                 assert!(matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(_)))));
 
                 // INCR operation on shared counter
-                let incr_cmd = ParsedCommand::new("INCR", vec!["shared_counter".to_string()]);
+                let incr_cmd = ParsedCommand::new("INCR", vec![bytes::Bytes::from_static(b"shared_counter")]);
                 let result = registry_clone.execute(&incr_cmd, &store_clone).await;
                 assert!(matches!(result, CommandResult::Ok(ResponseValue::Integer(_))));
 

@@ -1,6 +1,7 @@
 //! Hash command implementations (HSET, HGET, HDEL, HGETALL, HEXISTS)
 
-use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
+use crate::commands::registry::Args;
+use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
 
@@ -10,16 +11,25 @@ pub struct HsetCommand;
 
 #[async_trait]
 impl Command for HsetCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 3 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'HSET' command".to_string(),
             );
         }
 
-        let key = &args[0];
-        let field = &args[1];
-        let value = &args[2];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let field = match arg_str(args, 1) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let value = match arg_str(args, 2) {
+            Ok(v) => v,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.hset(key, field, value).await {
             Ok(is_new_field) => {
@@ -45,15 +55,21 @@ pub struct HgetCommand;
 
 #[async_trait]
 impl Command for HgetCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'HGET' command".to_string(),
             );
         }
 
-        let key = &args[0];
-        let field = &args[1];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let field = match arg_str(args, 1) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.hget(key, field).await {
             Ok(Some(value)) => CommandResult::Ok(ResponseValue::bulk(value)),
@@ -81,18 +97,24 @@ pub struct HdelCommand;
 
 #[async_trait]
 impl Command for HdelCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() < 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'HDEL' command".to_string(),
             );
         }
 
-        let key = &args[0];
-        let fields = &args[1..];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
         let mut deleted_count = 0i64;
 
-        for field in fields {
+        for i in 1..args.len() {
+            let field = match arg_str(args, i) {
+                Ok(f) => f,
+                Err(e) => return CommandResult::Error(e),
+            };
             match store.hdel(key, field).await {
                 Ok(true) => deleted_count += 1,
                 Ok(false) => {} // Field didn't exist, continue
@@ -118,14 +140,17 @@ pub struct HgetallCommand;
 
 #[async_trait]
 impl Command for HgetallCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'HGETALL' command".to_string(),
             );
         }
 
-        let key = &args[0];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.hgetall(key).await {
             Ok(fields) => {
@@ -160,15 +185,21 @@ pub struct HexistsCommand;
 
 #[async_trait]
 impl Command for HexistsCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'HEXISTS' command".to_string(),
             );
         }
 
-        let key = &args[0];
-        let field = &args[1];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let field = match arg_str(args, 1) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.hexists(key, field).await {
             Ok(exists) => CommandResult::Ok(ResponseValue::Integer(if exists { 1 } else { 0 })),
@@ -206,9 +237,9 @@ mod tests {
         let store = create_test_store();
         let cmd = HsetCommand;
         let args = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "value1".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"value1"),
         ];
 
         let result = cmd.execute(&args, &store).await;
@@ -232,9 +263,9 @@ mod tests {
 
         // Set initial value
         let args1 = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "value1".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"value1"),
         ];
         let result1 = cmd.execute(&args1, &store).await;
         assert!(matches!(
@@ -244,9 +275,9 @@ mod tests {
 
         // Update the same field
         let args2 = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "value2".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"value2"),
         ];
         let result2 = cmd.execute(&args2, &store).await;
 
@@ -268,16 +299,19 @@ mod tests {
         let cmd = HsetCommand;
 
         // Too few arguments
-        let args = vec!["myhash".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
         let args = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "value1".to_string(),
-            "extra".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"value1"),
+            bytes::Bytes::from_static(b"extra"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
@@ -299,7 +333,10 @@ mod tests {
         store.hset("myhash", "field1", "value1").await.unwrap();
 
         let cmd = HgetCommand;
-        let args = vec!["myhash".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -319,7 +356,10 @@ mod tests {
         store.hset("myhash", "field1", "value1").await.unwrap();
 
         let cmd = HgetCommand;
-        let args = vec!["myhash".to_string(), "field2".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field2"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -335,7 +375,10 @@ mod tests {
     async fn test_hget_command_nonexistent_key() {
         let store = create_test_store();
         let cmd = HgetCommand;
-        let args = vec!["nonexistent".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"nonexistent"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -353,15 +396,15 @@ mod tests {
         let cmd = HgetCommand;
 
         // Too few arguments
-        let args = vec!["myhash".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"myhash")];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
         let args = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "extra".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"extra"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
@@ -384,7 +427,10 @@ mod tests {
         store.hset("myhash", "field2", "value2").await.unwrap();
 
         let cmd = HdelCommand;
-        let args = vec!["myhash".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -415,10 +461,10 @@ mod tests {
 
         let cmd = HdelCommand;
         let args = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "field2".to_string(),
-            "nonexistent".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"field2"),
+            bytes::Bytes::from_static(b"nonexistent"),
         ];
 
         let result = cmd.execute(&args, &store).await;
@@ -445,7 +491,10 @@ mod tests {
     async fn test_hdel_command_nonexistent_key() {
         let store = create_test_store();
         let cmd = HdelCommand;
-        let args = vec!["nonexistent".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"nonexistent"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -463,7 +512,7 @@ mod tests {
         let cmd = HdelCommand;
 
         // Too few arguments
-        let args = vec!["myhash".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"myhash")];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -485,7 +534,7 @@ mod tests {
         store.hset("myhash", "field2", "value2").await.unwrap();
 
         let cmd = HgetallCommand;
-        let args = vec!["myhash".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"myhash")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -527,7 +576,7 @@ mod tests {
         store.hdel("myhash", "field1").await.unwrap();
 
         let cmd = HgetallCommand;
-        let args = vec!["myhash".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"myhash")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -543,7 +592,7 @@ mod tests {
     async fn test_hgetall_command_nonexistent_key() {
         let store = create_test_store();
         let cmd = HgetallCommand;
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -566,7 +615,10 @@ mod tests {
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
-        let args = vec!["myhash".to_string(), "extra".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"extra"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -587,7 +639,10 @@ mod tests {
         store.hset("myhash", "field1", "value1").await.unwrap();
 
         let cmd = HexistsCommand;
-        let args = vec!["myhash".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -607,7 +662,10 @@ mod tests {
         store.hset("myhash", "field1", "value1").await.unwrap();
 
         let cmd = HexistsCommand;
-        let args = vec!["myhash".to_string(), "field2".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field2"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -623,7 +681,10 @@ mod tests {
     async fn test_hexists_command_nonexistent_key() {
         let store = create_test_store();
         let cmd = HexistsCommand;
-        let args = vec!["nonexistent".to_string(), "field1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"nonexistent"),
+            bytes::Bytes::from_static(b"field1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -641,15 +702,15 @@ mod tests {
         let cmd = HexistsCommand;
 
         // Too few arguments
-        let args = vec!["myhash".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"myhash")];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
 
         // Too many arguments
         let args = vec![
-            "myhash".to_string(),
-            "field1".to_string(),
-            "extra".to_string(),
+            bytes::Bytes::from_static(b"myhash"),
+            bytes::Bytes::from_static(b"field1"),
+            bytes::Bytes::from_static(b"extra"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(result, CommandResult::Error(_)));
@@ -677,7 +738,11 @@ mod tests {
         // Set multiple fields
         let result = hset_cmd
             .execute(
-                &["myhash".to_string(), "name".to_string(), "John".to_string()],
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"name"),
+                    bytes::Bytes::from_static(b"John"),
+                ],
                 &store,
             )
             .await;
@@ -688,7 +753,11 @@ mod tests {
 
         let result = hset_cmd
             .execute(
-                &["myhash".to_string(), "age".to_string(), "30".to_string()],
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"age"),
+                    bytes::Bytes::from_static(b"30"),
+                ],
                 &store,
             )
             .await;
@@ -699,7 +768,13 @@ mod tests {
 
         // Get individual fields
         let result = hget_cmd
-            .execute(&["myhash".to_string(), "name".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"name"),
+                ],
+                &store,
+            )
             .await;
         assert!(
             matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "John")
@@ -707,7 +782,13 @@ mod tests {
 
         // Check field existence
         let result = hexists_cmd
-            .execute(&["myhash".to_string(), "name".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"name"),
+                ],
+                &store,
+            )
             .await;
         assert!(matches!(
             result,
@@ -715,7 +796,13 @@ mod tests {
         ));
 
         let result = hexists_cmd
-            .execute(&["myhash".to_string(), "nonexistent".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"nonexistent"),
+                ],
+                &store,
+            )
             .await;
         assert!(matches!(
             result,
@@ -723,7 +810,9 @@ mod tests {
         ));
 
         // Get all fields
-        let result = hgetall_cmd.execute(&["myhash".to_string()], &store).await;
+        let result = hgetall_cmd
+            .execute(&[bytes::Bytes::from_static(b"myhash")], &store)
+            .await;
         if let CommandResult::Ok(ResponseValue::Array(values)) = result {
             assert_eq!(values.len(), 4); // 2 fields * 2
         } else {
@@ -732,7 +821,13 @@ mod tests {
 
         // Delete a field
         let result = hdel_cmd
-            .execute(&["myhash".to_string(), "age".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"age"),
+                ],
+                &store,
+            )
             .await;
         assert!(matches!(
             result,
@@ -741,7 +836,13 @@ mod tests {
 
         // Verify field was deleted
         let result = hget_cmd
-            .execute(&["myhash".to_string(), "age".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"age"),
+                ],
+                &store,
+            )
             .await;
         assert!(matches!(
             result,
@@ -750,7 +851,13 @@ mod tests {
 
         // Verify other field still exists
         let result = hget_cmd
-            .execute(&["myhash".to_string(), "name".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"myhash"),
+                    bytes::Bytes::from_static(b"name"),
+                ],
+                &store,
+            )
             .await;
         assert!(
             matches!(result, CommandResult::Ok(ResponseValue::BulkString(Some(ref v))) if v == "John")
@@ -769,9 +876,9 @@ mod tests {
         let result = hset_cmd
             .execute(
                 &[
-                    "mykey".to_string(),
-                    "field1".to_string(),
-                    "value1".to_string(),
+                    bytes::Bytes::from_static(b"mykey"),
+                    bytes::Bytes::from_static(b"field1"),
+                    bytes::Bytes::from_static(b"value1"),
                 ],
                 &store,
             )
@@ -780,7 +887,13 @@ mod tests {
 
         let hget_cmd = HgetCommand;
         let result = hget_cmd
-            .execute(&["mykey".to_string(), "field1".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"mykey"),
+                    bytes::Bytes::from_static(b"field1"),
+                ],
+                &store,
+            )
             .await;
         assert!(matches!(result, CommandResult::Error(_)));
     }

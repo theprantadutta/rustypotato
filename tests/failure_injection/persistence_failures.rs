@@ -133,9 +133,9 @@ async fn test_recovery_valid_then_garbage() {
     file.sync_all().await.unwrap();
     drop(file);
 
-    let mut replayed = vec![];
+    let mut replayed: Vec<String> = vec![];
     let _ = replay_aof_file(&aof_path, |cmd| {
-        replayed.push(cmd.args[0].clone());
+        replayed.push(String::from_utf8_lossy(&cmd.args[0]).into_owned());
         async { Ok(()) }
     })
     .await

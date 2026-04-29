@@ -1,6 +1,7 @@
 //! Atomic operation command implementations (INCR, DECR)
 
-use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
+use crate::commands::registry::Args;
+use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
 
@@ -9,14 +10,17 @@ pub struct IncrCommand;
 
 #[async_trait]
 impl Command for IncrCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'INCR' command".to_string(),
             );
         }
 
-        let key = &args[0];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.incr(key).await {
             Ok(new_value) => CommandResult::Ok(ResponseValue::Integer(new_value)),
@@ -38,14 +42,17 @@ pub struct DecrCommand;
 
 #[async_trait]
 impl Command for DecrCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'DECR' command".to_string(),
             );
         }
 
-        let key = &args[0];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.decr(key).await {
             Ok(new_value) => CommandResult::Ok(ResponseValue::Integer(new_value)),
@@ -75,7 +82,9 @@ mod tests {
         let store = MemoryStore::new();
         let cmd = IncrCommand;
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {
@@ -97,7 +106,9 @@ mod tests {
         // Set initial value
         store.set("test_key", 5i64).await.unwrap();
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {
@@ -115,7 +126,9 @@ mod tests {
         // Set initial value as string number
         store.set("test_key", "42").await.unwrap();
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {
@@ -133,7 +146,9 @@ mod tests {
         // Set initial value as non-numeric string
         store.set("test_key", "not_a_number").await.unwrap();
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -163,7 +178,9 @@ mod tests {
         let store = MemoryStore::new();
         let cmd = DecrCommand;
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {
@@ -185,7 +202,9 @@ mod tests {
         // Set initial value
         store.set("test_key", 10i64).await.unwrap();
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {
@@ -203,7 +222,9 @@ mod tests {
         // Set initial value as string number
         store.set("test_key", "100").await.unwrap();
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {
@@ -221,7 +242,9 @@ mod tests {
         // Set initial value as non-numeric string
         store.set("test_key", "invalid").await.unwrap();
 
-        let result = cmd.execute(&["test_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"test_key")], &store)
+            .await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -253,35 +276,45 @@ mod tests {
         let decr_cmd = DecrCommand;
 
         // Start with INCR on new key
-        let result1 = incr_cmd.execute(&["counter".to_string()], &store).await;
+        let result1 = incr_cmd
+            .execute(&[bytes::Bytes::from_static(b"counter")], &store)
+            .await;
         assert!(matches!(
             result1,
             CommandResult::Ok(ResponseValue::Integer(1))
         ));
 
         // INCR again
-        let result2 = incr_cmd.execute(&["counter".to_string()], &store).await;
+        let result2 = incr_cmd
+            .execute(&[bytes::Bytes::from_static(b"counter")], &store)
+            .await;
         assert!(matches!(
             result2,
             CommandResult::Ok(ResponseValue::Integer(2))
         ));
 
         // DECR
-        let result3 = decr_cmd.execute(&["counter".to_string()], &store).await;
+        let result3 = decr_cmd
+            .execute(&[bytes::Bytes::from_static(b"counter")], &store)
+            .await;
         assert!(matches!(
             result3,
             CommandResult::Ok(ResponseValue::Integer(1))
         ));
 
         // DECR again
-        let result4 = decr_cmd.execute(&["counter".to_string()], &store).await;
+        let result4 = decr_cmd
+            .execute(&[bytes::Bytes::from_static(b"counter")], &store)
+            .await;
         assert!(matches!(
             result4,
             CommandResult::Ok(ResponseValue::Integer(0))
         ));
 
         // DECR to negative
-        let result5 = decr_cmd.execute(&["counter".to_string()], &store).await;
+        let result5 = decr_cmd
+            .execute(&[bytes::Bytes::from_static(b"counter")], &store)
+            .await;
         assert!(matches!(
             result5,
             CommandResult::Ok(ResponseValue::Integer(-1))
@@ -304,7 +337,10 @@ mod tests {
                         let cmd = IncrCommand;
                         for _ in 0..10 {
                             let _ = cmd
-                                .execute(&["concurrent_key".to_string()], &store_clone)
+                                .execute(
+                                    &[bytes::Bytes::from_static(b"concurrent_key")],
+                                    &store_clone,
+                                )
                                 .await;
                         }
                     });
@@ -342,11 +378,15 @@ mod tests {
                         if i % 2 == 0 {
                             // Even threads increment
                             let cmd = IncrCommand;
-                            let _ = cmd.execute(&["mixed_key".to_string()], &store_clone).await;
+                            let _ = cmd
+                                .execute(&[bytes::Bytes::from_static(b"mixed_key")], &store_clone)
+                                .await;
                         } else {
                             // Odd threads decrement
                             let cmd = DecrCommand;
-                            let _ = cmd.execute(&["mixed_key".to_string()], &store_clone).await;
+                            let _ = cmd
+                                .execute(&[bytes::Bytes::from_static(b"mixed_key")], &store_clone)
+                                .await;
                         }
                     });
                 });
@@ -372,7 +412,9 @@ mod tests {
         // Set value at i64::MAX
         store.set("overflow_key", i64::MAX).await.unwrap();
 
-        let result = cmd.execute(&["overflow_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"overflow_key")], &store)
+            .await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -391,7 +433,9 @@ mod tests {
         // Set value at i64::MIN
         store.set("underflow_key", i64::MIN).await.unwrap();
 
-        let result = cmd.execute(&["underflow_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"underflow_key")], &store)
+            .await;
 
         match result {
             CommandResult::Error(msg) => {
@@ -413,7 +457,9 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
 
         // INCR should treat expired key as new key
-        let result = cmd.execute(&["expired_key".to_string()], &store).await;
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"expired_key")], &store)
+            .await;
 
         match result {
             CommandResult::Ok(ResponseValue::Integer(value)) => {

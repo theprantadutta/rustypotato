@@ -2,14 +2,24 @@
 
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+/// Convenience alias for the slice that command implementations
+/// receive. Each element is a single argument as raw bytes — the
+/// codec preserves the wire payload verbatim, so commands that need
+/// a textual view must do their own UTF-8 check (see
+/// `arg_str` in `commands::mod`).
+pub type Args<'a> = &'a [Bytes];
 
 /// Trait for command implementations
 #[async_trait]
 pub trait Command: Send + Sync {
-    /// Execute the command with given arguments
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult;
+    /// Execute the command with given arguments. Each argument is
+    /// arbitrary bytes (binary-safe); use `arg_str(args, i)` to peek
+    /// at one as `&str` when the command's grammar requires UTF-8.
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult;
 
     /// Get the command name
     fn name(&self) -> &'static str;
@@ -32,17 +42,22 @@ pub enum CommandResult {
     Error(String),
 }
 
-/// Parsed command representation
+/// Parsed command representation.
+///
+/// `args` holds raw byte payloads (binary-safe). `name` is `String`
+/// because the codec uppercases it for lookup, which requires
+/// well-formed UTF-8; the parser enforces UTF-8 only on that single
+/// position.
 #[derive(Debug, Clone)]
 pub struct ParsedCommand {
     pub name: String,
-    pub args: Vec<String>,
+    pub args: Vec<Bytes>,
     pub client_id: Uuid,
 }
 
 impl ParsedCommand {
     /// Create a new parsed command
-    pub fn new(name: String, args: Vec<String>, client_id: Uuid) -> Self {
+    pub fn new(name: String, args: Vec<Bytes>, client_id: Uuid) -> Self {
         Self {
             name,
             args,
@@ -60,7 +75,10 @@ impl ParsedCommand {
         }
 
         let name = parts[0].to_string();
-        let args = parts[1..].iter().map(|s| s.to_string()).collect();
+        let args = parts[1..]
+            .iter()
+            .map(|s| Bytes::copy_from_slice(s.as_bytes()))
+            .collect();
 
         Ok(Self::new(name, args, client_id))
     }
@@ -185,7 +203,7 @@ impl Default for CommandRegistry {
 /// `MAX_REPORTED_ARGS`). Real clients use this trailing context to
 /// surface diagnostic info — matching the format makes those clients
 /// "just work".
-fn format_unknown_command(name: &str, args: &[String]) -> String {
+fn format_unknown_command(name: &str, args: &[Bytes]) -> String {
     const MAX_REPORTED_ARGS: usize = 5;
     if args.is_empty() {
         return format!("ERR unknown command '{name}', with args beginning with: ");
@@ -193,7 +211,11 @@ fn format_unknown_command(name: &str, args: &[String]) -> String {
     let mut quoted: Vec<String> = args
         .iter()
         .take(MAX_REPORTED_ARGS)
-        .map(|a| format!("'{a}'"))
+        .map(|a| {
+            // Quote the textual rendering — non-UTF-8 bytes show as
+            // replacement chars, which is fine for a diagnostic.
+            format!("'{}'", String::from_utf8_lossy(a))
+        })
         .collect();
     if args.len() > MAX_REPORTED_ARGS {
         quoted.push("...".to_string());
@@ -212,10 +234,13 @@ fn unknown_command_message_matches_redis_format() {
         "ERR unknown command 'FOOBAR', with args beginning with: "
     );
     assert_eq!(
-        format_unknown_command("FOOBAR", &["a".into(), "b".into()]),
+        format_unknown_command(
+            "FOOBAR",
+            &[Bytes::from_static(b"a"), Bytes::from_static(b"b")]
+        ),
         "ERR unknown command 'FOOBAR', with args beginning with: 'a', 'b'"
     );
-    let many: Vec<String> = (0..7).map(|i| format!("arg{i}")).collect();
+    let many: Vec<Bytes> = (0..7).map(|i| Bytes::from(format!("arg{i}"))).collect();
     let msg = format_unknown_command("X", &many);
     assert!(msg.starts_with("ERR unknown command 'X', with args beginning with:"));
     assert!(msg.contains("'arg0'"));
@@ -228,6 +253,15 @@ fn unknown_command_message_matches_redis_format() {
 mod tests {
     use super::*;
     use crate::commands::CommandArity;
+
+    /// Tiny `Bytes` literal helper for tests. `b!("foo")` ≡
+    /// `Bytes::from_static(b"foo")`. Keeps the args-construction sites
+    /// readable now that `ParsedCommand.args` is `Vec<Bytes>`.
+    macro_rules! b {
+        ($s:literal) => {
+            ::bytes::Bytes::from_static($s.as_bytes())
+        };
+    }
     use crate::storage::MemoryStore;
     use uuid::Uuid;
 
@@ -240,7 +274,7 @@ mod tests {
 
     #[async_trait]
     impl Command for MockCommand {
-        async fn execute(&self, args: &[String], _store: &MemoryStore) -> CommandResult {
+        async fn execute(&self, args: Args<'_>, _store: &MemoryStore) -> CommandResult {
             if self.should_error {
                 CommandResult::Error("Mock error".to_string())
             } else {
@@ -265,12 +299,15 @@ mod tests {
         let client_id = Uuid::new_v4();
         let cmd = ParsedCommand::new(
             "SET".to_string(),
-            vec!["key".to_string(), "value".to_string()],
+            vec![Bytes::from_static(b"key"), Bytes::from_static(b"value")],
             client_id,
         );
 
         assert_eq!(cmd.name, "SET");
-        assert_eq!(cmd.args, vec!["key", "value"]);
+        assert_eq!(
+            cmd.args,
+            vec![Bytes::from_static(b"key"), Bytes::from_static(b"value")]
+        );
         assert_eq!(cmd.client_id, client_id);
         assert_eq!(cmd.total_args(), 3); // SET + key + value
     }
@@ -283,7 +320,10 @@ mod tests {
         assert!(result.is_ok());
         let cmd = result.unwrap();
         assert_eq!(cmd.name, "SET");
-        assert_eq!(cmd.args, vec!["key", "value"]);
+        assert_eq!(
+            cmd.args,
+            vec![Bytes::from_static(b"key"), Bytes::from_static(b"value")]
+        );
         assert_eq!(cmd.client_id, client_id);
     }
 
@@ -323,17 +363,13 @@ mod tests {
         assert!(result.is_ok());
         let cmd = result.unwrap();
         assert_eq!(cmd.name, "SET");
-        assert_eq!(cmd.args, vec!["key", "value"]);
+        assert_eq!(cmd.args, vec![b!("key"), b!("value")]);
     }
 
     #[test]
     fn test_validate_arity_fixed_valid() {
         let client_id = Uuid::new_v4();
-        let cmd = ParsedCommand::new(
-            "SET".to_string(),
-            vec!["key".to_string(), "value".to_string()],
-            client_id,
-        );
+        let cmd = ParsedCommand::new("SET".to_string(), vec![b!("key"), b!("value")], client_id);
 
         let result = cmd.validate_arity(&CommandArity::Fixed(3));
         assert!(result.is_ok());
@@ -342,7 +378,7 @@ mod tests {
     #[test]
     fn test_validate_arity_fixed_invalid() {
         let client_id = Uuid::new_v4();
-        let cmd = ParsedCommand::new("SET".to_string(), vec!["key".to_string()], client_id);
+        let cmd = ParsedCommand::new("SET".to_string(), vec![b!("key")], client_id);
 
         let result = cmd.validate_arity(&CommandArity::Fixed(3));
         assert!(result.is_err());
@@ -352,11 +388,7 @@ mod tests {
     #[test]
     fn test_validate_arity_range_valid() {
         let client_id = Uuid::new_v4();
-        let cmd = ParsedCommand::new(
-            "DEL".to_string(),
-            vec!["key1".to_string(), "key2".to_string()],
-            client_id,
-        );
+        let cmd = ParsedCommand::new("DEL".to_string(), vec![b!("key1"), b!("key2")], client_id);
 
         let result = cmd.validate_arity(&CommandArity::Range(2, 5));
         assert!(result.is_ok());
@@ -377,13 +409,7 @@ mod tests {
         let client_id = Uuid::new_v4();
         let cmd = ParsedCommand::new(
             "DEL".to_string(),
-            vec![
-                "k1".to_string(),
-                "k2".to_string(),
-                "k3".to_string(),
-                "k4".to_string(),
-                "k5".to_string(),
-            ],
+            vec![b!("k1"), b!("k2"), b!("k3"), b!("k4"), b!("k5")],
             client_id,
         );
 
@@ -397,7 +423,7 @@ mod tests {
         let client_id = Uuid::new_v4();
         let cmd = ParsedCommand::new(
             "DEL".to_string(),
-            vec!["key1".to_string(), "key2".to_string(), "key3".to_string()],
+            vec![b!("key1"), b!("key2"), b!("key3")],
             client_id,
         );
 
@@ -491,7 +517,7 @@ mod tests {
 
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        let cmd = ParsedCommand::new("TEST".to_string(), vec!["arg1".to_string()], client_id);
+        let cmd = ParsedCommand::new("TEST".to_string(), vec![b!("arg1")], client_id);
 
         let result = registry.execute(&cmd, &store).await;
         match result {
@@ -529,7 +555,7 @@ mod tests {
 
         let store = MemoryStore::new();
         let client_id = Uuid::new_v4();
-        let cmd = ParsedCommand::new("TEST".to_string(), vec!["arg1".to_string()], client_id);
+        let cmd = ParsedCommand::new("TEST".to_string(), vec![b!("arg1")], client_id);
 
         let result = registry.execute(&cmd, &store).await;
         match result {

@@ -2,7 +2,8 @@
 //! PING, ECHO, DBSIZE, TYPE, FLUSHDB, INFO and (in subsequent
 //! stages) COMMAND, KEYS, QUIT.
 
-use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
+use crate::commands::registry::Args;
+use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::MemoryStore;
 use async_trait::async_trait;
 use std::sync::OnceLock;
@@ -30,7 +31,7 @@ pub struct PingCommand;
 
 #[async_trait]
 impl Command for PingCommand {
-    async fn execute(&self, args: &[String], _store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, _store: &MemoryStore) -> CommandResult {
         match args.len() {
             0 => CommandResult::Ok(ResponseValue::SimpleString("PONG".to_string())),
             1 => CommandResult::Ok(ResponseValue::bulk(args[0].clone())),
@@ -63,7 +64,7 @@ pub struct EchoCommand;
 
 #[async_trait]
 impl Command for EchoCommand {
-    async fn execute(&self, args: &[String], _store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, _store: &MemoryStore) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'ECHO' command".to_string(),
@@ -95,7 +96,7 @@ pub struct DbsizeCommand;
 
 #[async_trait]
 impl Command for DbsizeCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if !args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'DBSIZE' command".to_string(),
@@ -126,13 +127,17 @@ pub struct TypeCommand;
 
 #[async_trait]
 impl Command for TypeCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'TYPE' command".to_string(),
             );
         }
-        let kind = match store.get(&args[0]) {
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let kind = match store.get(key) {
             Ok(Some(stored)) => stored.value.type_name().to_string(),
             Ok(None) => "none".to_string(),
             Err(e) => return CommandResult::Error(e.to_client_error()),
@@ -161,7 +166,7 @@ pub struct FlushdbCommand;
 
 #[async_trait]
 impl Command for FlushdbCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         // Real Redis accepts a single optional `ASYNC` / `SYNC` token;
         // we don't async-flush so we just reject unknown args.
         match args.len() {
@@ -169,7 +174,9 @@ impl Command for FlushdbCommand {
                 store.clear();
                 CommandResult::Ok(ResponseValue::SimpleString("OK".to_string()))
             }
-            1 if args[0].eq_ignore_ascii_case("SYNC") || args[0].eq_ignore_ascii_case("ASYNC") => {
+            1 if args[0].eq_ignore_ascii_case(b"SYNC")
+                || args[0].eq_ignore_ascii_case(b"ASYNC") =>
+            {
                 store.clear();
                 CommandResult::Ok(ResponseValue::SimpleString("OK".to_string()))
             }
@@ -198,13 +205,16 @@ pub struct InfoCommand;
 
 #[async_trait]
 impl Command for InfoCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         // Trigger uptime anchor on first use.
         let uptime_seconds = uptime_anchor().elapsed().as_secs();
 
         let want_section = match args.len() {
-            0 => "default",
-            1 => args[0].as_str(),
+            0 => "default".to_string(),
+            1 => match arg_str(args, 0) {
+                Ok(s) => s.to_string(),
+                Err(e) => return CommandResult::Error(e),
+            },
             _ => {
                 return CommandResult::Error(
                     "ERR wrong number of arguments for 'INFO' command".to_string(),
@@ -278,17 +288,20 @@ pub struct KeysCommand;
 
 #[async_trait]
 impl Command for KeysCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'KEYS' command".to_string(),
             );
         }
-        let pattern = &args[0];
+        let pattern = match arg_str(args, 0) {
+            Ok(p) => p.to_string(),
+            Err(e) => return CommandResult::Error(e),
+        };
         let matches: Vec<ResponseValue> = store
             .keys()
             .into_iter()
-            .filter(|k| glob_match(pattern, k))
+            .filter(|k| glob_match(&pattern, k))
             .map(ResponseValue::bulk)
             .collect();
         CommandResult::Ok(ResponseValue::Array(matches))
@@ -426,7 +439,7 @@ mod tests {
     async fn ping_with_message_echoes_bulk_string() {
         let store = MemoryStore::new();
         let result = PingCommand
-            .execute(&["hello world".to_string()], &store)
+            .execute(&[bytes::Bytes::from_static(b"hello world")], &store)
             .await;
         assert_eq!(
             result,
@@ -438,7 +451,13 @@ mod tests {
     async fn ping_too_many_args_is_an_error() {
         let store = MemoryStore::new();
         let result = PingCommand
-            .execute(&["a".to_string(), "b".to_string()], &store)
+            .execute(
+                &[
+                    bytes::Bytes::from_static(b"a"),
+                    bytes::Bytes::from_static(b"b"),
+                ],
+                &store,
+            )
             .await;
         assert!(matches!(result, CommandResult::Error(_)));
     }
@@ -446,7 +465,9 @@ mod tests {
     #[tokio::test]
     async fn echo_returns_message_as_bulk_string() {
         let store = MemoryStore::new();
-        let result = EchoCommand.execute(&["hi there".to_string()], &store).await;
+        let result = EchoCommand
+            .execute(&[bytes::Bytes::from_static(b"hi there")], &store)
+            .await;
         assert_eq!(result, CommandResult::Ok(ResponseValue::bulk("hi there")));
     }
 
@@ -459,7 +480,13 @@ mod tests {
         ));
         assert!(matches!(
             EchoCommand
-                .execute(&["a".to_string(), "b".to_string()], &store)
+                .execute(
+                    &[
+                        bytes::Bytes::from_static(b"a"),
+                        bytes::Bytes::from_static(b"b")
+                    ],
+                    &store
+                )
                 .await,
             CommandResult::Error(_)
         ));
@@ -492,7 +519,9 @@ mod tests {
     async fn dbsize_with_args_errors() {
         let store = MemoryStore::new();
         assert!(matches!(
-            DbsizeCommand.execute(&["x".to_string()], &store).await,
+            DbsizeCommand
+                .execute(&[bytes::Bytes::from_static(b"x")], &store)
+                .await,
             CommandResult::Error(_)
         ));
     }
@@ -500,7 +529,9 @@ mod tests {
     #[tokio::test]
     async fn type_returns_none_for_missing_key() {
         let store = MemoryStore::new();
-        let r = TypeCommand.execute(&["nope".to_string()], &store).await;
+        let r = TypeCommand
+            .execute(&[bytes::Bytes::from_static(b"nope")], &store)
+            .await;
         assert_eq!(
             r,
             CommandResult::Ok(ResponseValue::SimpleString("none".to_string()))
@@ -514,9 +545,15 @@ mod tests {
         store.set("i", 7i64).await.unwrap();
         store.hset("h", "f", "v").await.unwrap();
 
-        let s = TypeCommand.execute(&["s".to_string()], &store).await;
-        let i = TypeCommand.execute(&["i".to_string()], &store).await;
-        let h = TypeCommand.execute(&["h".to_string()], &store).await;
+        let s = TypeCommand
+            .execute(&[bytes::Bytes::from_static(b"s")], &store)
+            .await;
+        let i = TypeCommand
+            .execute(&[bytes::Bytes::from_static(b"i")], &store)
+            .await;
+        let h = TypeCommand
+            .execute(&[bytes::Bytes::from_static(b"h")], &store)
+            .await;
 
         assert_eq!(
             s,
@@ -551,17 +588,23 @@ mod tests {
     async fn flushdb_accepts_sync_and_async_modifier() {
         let store = MemoryStore::new();
         store.set("k", "v").await.unwrap();
-        let r = FlushdbCommand.execute(&["SYNC".to_string()], &store).await;
+        let r = FlushdbCommand
+            .execute(&[bytes::Bytes::from_static(b"SYNC")], &store)
+            .await;
         assert!(matches!(r, CommandResult::Ok(_)));
         store.set("k", "v").await.unwrap();
-        let r = FlushdbCommand.execute(&["async".to_string()], &store).await;
+        let r = FlushdbCommand
+            .execute(&[bytes::Bytes::from_static(b"async")], &store)
+            .await;
         assert!(matches!(r, CommandResult::Ok(_)));
     }
 
     #[tokio::test]
     async fn flushdb_rejects_unknown_modifier() {
         let store = MemoryStore::new();
-        let r = FlushdbCommand.execute(&["NUKE".to_string()], &store).await;
+        let r = FlushdbCommand
+            .execute(&[bytes::Bytes::from_static(b"NUKE")], &store)
+            .await;
         assert!(matches!(r, CommandResult::Error(_)));
     }
 
@@ -596,7 +639,9 @@ mod tests {
     #[tokio::test]
     async fn info_server_section_only() {
         let store = MemoryStore::new();
-        let r = InfoCommand.execute(&["server".to_string()], &store).await;
+        let r = InfoCommand
+            .execute(&[bytes::Bytes::from_static(b"server")], &store)
+            .await;
         let body = extract_bulk(&r);
         assert!(body.contains("# Server"));
         assert!(!body.contains("# Keyspace"));
@@ -605,7 +650,9 @@ mod tests {
     #[tokio::test]
     async fn info_unknown_section_yields_empty_bulk() {
         let store = MemoryStore::new();
-        let r = InfoCommand.execute(&["nonsense".to_string()], &store).await;
+        let r = InfoCommand
+            .execute(&[bytes::Bytes::from_static(b"nonsense")], &store)
+            .await;
         assert_eq!(extract_bulk(&r), "");
     }
 
@@ -614,7 +661,13 @@ mod tests {
         let store = MemoryStore::new();
         assert!(matches!(
             InfoCommand
-                .execute(&["a".to_string(), "b".to_string()], &store)
+                .execute(
+                    &[
+                        bytes::Bytes::from_static(b"a"),
+                        bytes::Bytes::from_static(b"b")
+                    ],
+                    &store
+                )
                 .await,
             CommandResult::Error(_)
         ));
@@ -670,7 +723,9 @@ mod tests {
         store.set("user:1", "a").await.unwrap();
         store.set("user:2", "b").await.unwrap();
         store.set("session:1", "c").await.unwrap();
-        let r = KeysCommand.execute(&["user:*".to_string()], &store).await;
+        let r = KeysCommand
+            .execute(&[bytes::Bytes::from_static(b"user:*")], &store)
+            .await;
         match r {
             CommandResult::Ok(ResponseValue::Array(items)) => {
                 assert_eq!(items.len(), 2);
@@ -695,7 +750,9 @@ mod tests {
         let store = MemoryStore::new();
         store.set("a", "1").await.unwrap();
         store.set("b", "2").await.unwrap();
-        let r = KeysCommand.execute(&["*".to_string()], &store).await;
+        let r = KeysCommand
+            .execute(&[bytes::Bytes::from_static(b"*")], &store)
+            .await;
         if let CommandResult::Ok(ResponseValue::Array(items)) = r {
             assert_eq!(items.len(), 2);
         } else {
@@ -707,7 +764,9 @@ mod tests {
     async fn keys_empty_when_no_match() {
         let store = MemoryStore::new();
         store.set("a", "1").await.unwrap();
-        let r = KeysCommand.execute(&["nope:*".to_string()], &store).await;
+        let r = KeysCommand
+            .execute(&[bytes::Bytes::from_static(b"nope:*")], &store)
+            .await;
         assert_eq!(r, CommandResult::Ok(ResponseValue::Array(vec![])));
     }
 
@@ -720,7 +779,13 @@ mod tests {
         ));
         assert!(matches!(
             KeysCommand
-                .execute(&["a".to_string(), "b".to_string()], &store)
+                .execute(
+                    &[
+                        bytes::Bytes::from_static(b"a"),
+                        bytes::Bytes::from_static(b"b")
+                    ],
+                    &store
+                )
                 .await,
             CommandResult::Error(_)
         ));

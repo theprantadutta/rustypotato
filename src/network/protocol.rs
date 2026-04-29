@@ -187,26 +187,16 @@ impl RespCodec {
             Some(RespValue::Array(elements)) => {
                 let consumed = cursor.position() as usize;
 
-                // Convert RESP array to command. ParsedCommand still
-                // carries `Vec<String>` for now; the bytes-everywhere
-                // migration of the command surface lands in a later
-                // stage. We enforce UTF-8 here at the dispatch boundary
-                // (with a defined error message) so the codec itself
-                // remains binary-safe.
-                let mut args = Vec::new();
+                // Convert RESP array to command. `ParsedCommand.args`
+                // is `Vec<Bytes>` so binary-safe payloads pass through
+                // verbatim. Only the command-name slot (first array
+                // element) is required to be UTF-8, since the registry
+                // lookup uppercases it for case-insensitive dispatch.
+                let mut args: Vec<bytes::Bytes> = Vec::new();
                 for element in elements {
                     match element {
-                        RespValue::BulkString(Some(b)) => {
-                            let s = std::str::from_utf8(&b).map_err(|_| {
-                                RustyPotatoError::ProtocolError {
-                                    message: "Invalid UTF-8 in command argument".to_string(),
-                                    command: None,
-                                    source: None,
-                                }
-                            })?;
-                            args.push(s.to_string());
-                        }
-                        RespValue::SimpleString(s) => args.push(s),
+                        RespValue::BulkString(Some(b)) => args.push(b),
+                        RespValue::SimpleString(s) => args.push(bytes::Bytes::from(s)),
                         _ => {
                             return Err(RustyPotatoError::ProtocolError {
                                 message: "Command arguments must be strings".to_string(),
@@ -225,7 +215,17 @@ impl RespCodec {
                     });
                 }
 
-                let command_name = args.remove(0).to_uppercase();
+                let name_bytes = args.remove(0);
+                let command_name = match std::str::from_utf8(&name_bytes) {
+                    Ok(s) => s.to_uppercase(),
+                    Err(_) => {
+                        return Err(RustyPotatoError::ProtocolError {
+                            message: "Invalid UTF-8 in command name".to_string(),
+                            command: None,
+                            source: None,
+                        })
+                    }
+                };
                 // Use a placeholder UUID for now - this will be set by the connection handler
                 let parsed_command = ParsedCommand::new(command_name, args, uuid::Uuid::nil());
 
@@ -707,15 +707,41 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_invalid_utf8() {
+    fn test_decode_non_utf8_command_arg_now_accepted() {
+        // Stage 5e: ParsedCommand.args is Vec<Bytes>, so non-UTF-8
+        // arguments pass through the codec unchanged. UTF-8 is only
+        // enforced on the command-name slot (first array element)
+        // because the registry must uppercase it for case-insensitive
+        // dispatch. Individual commands that need a textual arg use
+        // `arg_str` and surface a clear protocol error themselves.
         let mut codec = RespCodec::new();
         let mut data = b"*2\r\n$3\r\nGET\r\n$3\r\n".to_vec();
-        data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8
+        data.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Non-UTF-8 bytes
+        data.extend_from_slice(b"\r\n");
+
+        let parsed = codec
+            .decode(&data)
+            .unwrap()
+            .expect("non-UTF-8 arg should decode");
+        assert_eq!(parsed.name, "GET");
+        assert_eq!(&parsed.args[0][..], &[0xFF, 0xFE, 0xFD]);
+    }
+
+    #[test]
+    fn test_decode_non_utf8_command_name_rejected() {
+        // The command-name slot still requires UTF-8 since we
+        // uppercase it for lookup.
+        let mut codec = RespCodec::new();
+        let mut data = b"*1\r\n$3\r\n".to_vec();
+        data.extend_from_slice(&[0xFF, 0xFE, 0xFD]);
         data.extend_from_slice(b"\r\n");
 
         let result = codec.decode(&data);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid UTF-8"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid UTF-8 in command name"));
     }
 
     #[test]

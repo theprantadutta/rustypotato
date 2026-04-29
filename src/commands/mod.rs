@@ -25,6 +25,18 @@ pub use ttl::{ExpireCommand, TtlCommand};
 
 use bytes::Bytes;
 
+/// View a single command argument as `&str`, returning a uniform
+/// Redis-style protocol error if it isn't valid UTF-8.
+///
+/// Most command grammars (keys, options, integer literals, hash field
+/// names) require text, but bulk strings on the wire are arbitrary
+/// bytes. This helper centralizes the boundary check so every command
+/// returns the same diagnostic.
+pub(crate) fn arg_str(args: &[Bytes], i: usize) -> Result<&str, String> {
+    std::str::from_utf8(&args[i])
+        .map_err(|_| "ERR value is not a valid UTF-8 string in this position".to_string())
+}
+
 /// Command execution result types.
 ///
 /// `BulkString` carries `Bytes` (not `String`) so that arbitrary-byte

@@ -1,8 +1,10 @@
 //! String command implementations (SET, GET, DEL, EXISTS)
 
-use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
+use crate::commands::registry::Args;
+use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::{MemoryStore, SetExistence, SetTtlOption};
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// SET command implementation
@@ -30,13 +32,15 @@ enum SetTtlChoice {
     UnixMilliseconds(u64),
 }
 
-fn parse_set_options(args: &[String]) -> std::result::Result<SetOptions, String> {
+fn parse_set_options(args: &[Bytes]) -> std::result::Result<SetOptions, String> {
     let mut opts = SetOptions::default();
     let mut ttl_set = false;
     let mut existence_set = false;
     let mut i = 0;
     while i < args.len() {
-        let token = args[i].to_ascii_uppercase();
+        let token_str =
+            std::str::from_utf8(&args[i]).map_err(|_| "ERR syntax error".to_string())?;
+        let token = token_str.to_ascii_uppercase();
         match token.as_str() {
             "NX" | "XX" => {
                 if existence_set {
@@ -65,7 +69,9 @@ fn parse_set_options(args: &[String]) -> std::result::Result<SetOptions, String>
                 if i + 1 >= args.len() {
                     return Err("ERR syntax error".to_string());
                 }
-                let n = args[i + 1]
+                let n_str = std::str::from_utf8(&args[i + 1])
+                    .map_err(|_| "ERR value is not an integer or out of range".to_string())?;
+                let n = n_str
                     .parse::<u64>()
                     .map_err(|_| "ERR value is not an integer or out of range".to_string())?;
                 if matches!(token.as_str(), "EX" | "PX") && n == 0 {
@@ -131,15 +137,19 @@ fn resolve_ttl(choice: &SetTtlChoice) -> std::result::Result<SetTtlOption, Strin
 
 #[async_trait]
 impl Command for SetCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() < 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'SET' command".to_string(),
             );
         }
 
-        let key = &args[0];
-        let value = &args[1];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k.to_string(),
+            Err(e) => return CommandResult::Error(e),
+        };
+        // Value is binary-safe: pass the Bytes directly to storage.
+        let value = args[1].clone();
 
         let opts = match parse_set_options(&args[2..]) {
             Ok(o) => o,
@@ -151,7 +161,7 @@ impl Command for SetCommand {
         };
 
         match store
-            .set_with_options(key.as_str(), value.as_str(), ttl, opts.existence)
+            .set_with_options(key, value, ttl, opts.existence)
             .await
         {
             Ok(outcome) => {
@@ -198,18 +208,26 @@ pub struct GetCommand;
 
 #[async_trait]
 impl Command for GetCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.len() != 1 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'GET' command".to_string(),
             );
         }
 
-        let key = &args[0];
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
 
         match store.get(key) {
             Ok(Some(stored_value)) => {
-                CommandResult::Ok(ResponseValue::bulk(stored_value.value.to_string()))
+                // Zero-copy when the stored value is already a string
+                // payload; integer values fall back through Display.
+                match stored_value.value.as_bytes() {
+                    Some(b) => CommandResult::Ok(ResponseValue::bulk(b.clone())),
+                    None => CommandResult::Ok(ResponseValue::bulk(stored_value.value.to_string())),
+                }
             }
             Ok(None) => CommandResult::Ok(ResponseValue::nil_bulk()),
             Err(e) => CommandResult::Error(e.to_client_error()),
@@ -235,7 +253,7 @@ pub struct DelCommand;
 
 #[async_trait]
 impl Command for DelCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'DEL' command".to_string(),
@@ -244,7 +262,11 @@ impl Command for DelCommand {
 
         let mut deleted_count = 0i64;
 
-        for key in args {
+        for i in 0..args.len() {
+            let key = match arg_str(args, i) {
+                Ok(k) => k,
+                Err(e) => return CommandResult::Error(e),
+            };
             match store.delete(key).await {
                 Ok(true) => deleted_count += 1,
                 Ok(false) => {} // Key didn't exist, continue
@@ -270,7 +292,7 @@ pub struct ExistsCommand;
 
 #[async_trait]
 impl Command for ExistsCommand {
-    async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
         if args.is_empty() {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'EXISTS' command".to_string(),
@@ -279,7 +301,11 @@ impl Command for ExistsCommand {
 
         let mut exists_count = 0i64;
 
-        for key in args {
+        for i in 0..args.len() {
+            let key = match arg_str(args, i) {
+                Ok(k) => k,
+                Err(e) => return CommandResult::Error(e),
+            };
             match store.exists(key) {
                 Ok(true) => exists_count += 1,
                 Ok(false) => {} // Key doesn't exist, continue
@@ -318,7 +344,10 @@ mod tests {
     async fn test_set_command_success() {
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["test_key".to_string(), "test_value".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"test_key"),
+            bytes::Bytes::from_static(b"test_value"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -340,7 +369,10 @@ mod tests {
         let cmd = SetCommand;
 
         // Set initial value
-        let args1 = vec!["key1".to_string(), "value1".to_string()];
+        let args1 = vec![
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"value1"),
+        ];
         let result1 = cmd.execute(&args1, &store).await;
         assert!(matches!(
             result1,
@@ -348,7 +380,10 @@ mod tests {
         ));
 
         // Overwrite with new value
-        let args2 = vec!["key1".to_string(), "value2".to_string()];
+        let args2 = vec![
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"value2"),
+        ];
         let result2 = cmd.execute(&args2, &store).await;
         assert!(matches!(
             result2,
@@ -364,7 +399,7 @@ mod tests {
     async fn test_set_command_wrong_args_too_few() {
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["only_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"only_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -383,7 +418,11 @@ mod tests {
         // `wrong number of arguments` error — Redis behaves this way.
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["key".to_string(), "value".to_string(), "extra".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"key"),
+            bytes::Bytes::from_static(b"value"),
+            bytes::Bytes::from_static(b"extra"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -399,7 +438,10 @@ mod tests {
     async fn test_set_command_empty_key_and_value() {
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["".to_string(), "".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b""),
+            bytes::Bytes::from_static(b""),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -431,7 +473,7 @@ mod tests {
         store.set("test_key", "test_value").await.unwrap();
 
         let cmd = GetCommand;
-        let args = vec!["test_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"test_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -447,7 +489,7 @@ mod tests {
     async fn test_get_command_nonexistent_key() {
         let store = create_test_store();
         let cmd = GetCommand;
-        let args = vec!["nonexistent_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -465,7 +507,7 @@ mod tests {
         store.set("int_key", 42i64).await.unwrap();
 
         let cmd = GetCommand;
-        let args = vec!["int_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"int_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -497,7 +539,10 @@ mod tests {
     async fn test_get_command_wrong_args_too_many() {
         let store = create_test_store();
         let cmd = GetCommand;
-        let args = vec!["key1".to_string(), "key2".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"key2"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -515,7 +560,7 @@ mod tests {
         store.set("", "empty_key_value").await.unwrap();
 
         let cmd = GetCommand;
-        let args = vec!["".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -541,7 +586,7 @@ mod tests {
         store.set("key1", "value1").await.unwrap();
 
         let cmd = DelCommand;
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -560,7 +605,7 @@ mod tests {
     async fn test_del_command_single_nonexistent_key() {
         let store = create_test_store();
         let cmd = DelCommand;
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -581,10 +626,10 @@ mod tests {
 
         let cmd = DelCommand;
         let args = vec![
-            "key1".to_string(),
-            "key2".to_string(),
-            "nonexistent".to_string(),
-            "key3".to_string(),
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"key2"),
+            bytes::Bytes::from_static(b"nonexistent"),
+            bytes::Bytes::from_static(b"key3"),
         ];
 
         let result = cmd.execute(&args, &store).await;
@@ -608,7 +653,10 @@ mod tests {
         store.set("key1", "value1").await.unwrap();
 
         let cmd = DelCommand;
-        let args = vec!["key1".to_string(), "key1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"key1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -650,7 +698,7 @@ mod tests {
         store.set("key1", "value1").await.unwrap();
 
         let cmd = ExistsCommand;
-        let args = vec!["key1".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"key1")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -666,7 +714,7 @@ mod tests {
     async fn test_exists_command_single_nonexistent_key() {
         let store = create_test_store();
         let cmd = ExistsCommand;
-        let args = vec!["nonexistent".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"nonexistent")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -685,7 +733,11 @@ mod tests {
         store.set("key3", "value3").await.unwrap();
 
         let cmd = ExistsCommand;
-        let args = vec!["key1".to_string(), "key2".to_string(), "key3".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"key2"),
+            bytes::Bytes::from_static(b"key3"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -703,7 +755,10 @@ mod tests {
         store.set("key1", "value1").await.unwrap();
 
         let cmd = ExistsCommand;
-        let args = vec!["key1".to_string(), "key1".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"key1"),
+            bytes::Bytes::from_static(b"key1"),
+        ];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -754,7 +809,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         let cmd = GetCommand;
-        let args = vec!["expired_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"expired_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -781,7 +836,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         let cmd = ExistsCommand;
-        let args = vec!["expired_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"expired_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -808,7 +863,7 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         let cmd = DelCommand;
-        let args = vec!["expired_key".to_string()];
+        let args = vec![bytes::Bytes::from_static(b"expired_key")];
 
         let result = cmd.execute(&args, &store).await;
 
@@ -827,9 +882,9 @@ mod tests {
 
         // Test SET with unicode
         let set_cmd = SetCommand;
-        let unicode_key = "🔑";
-        let unicode_value = "🎯 测试值";
-        let args = vec![unicode_key.to_string(), unicode_value.to_string()];
+        let unicode_key = bytes::Bytes::from_static("🔑".as_bytes());
+        let unicode_value = bytes::Bytes::from_static("🎯 测试值".as_bytes());
+        let args = vec![unicode_key.clone(), unicode_value.clone()];
 
         let result = set_cmd.execute(&args, &store).await;
         assert!(matches!(
@@ -839,7 +894,7 @@ mod tests {
 
         // Test GET with unicode
         let get_cmd = GetCommand;
-        let args = vec![unicode_key.to_string()];
+        let args = vec![unicode_key.clone()];
 
         let result = get_cmd.execute(&args, &store).await;
         match result {
@@ -851,7 +906,7 @@ mod tests {
 
         // Test EXISTS with unicode
         let exists_cmd = ExistsCommand;
-        let args = vec![unicode_key.to_string()];
+        let args = vec![unicode_key.clone()];
 
         let result = exists_cmd.execute(&args, &store).await;
         match result {
@@ -863,7 +918,7 @@ mod tests {
 
         // Test DEL with unicode
         let del_cmd = DelCommand;
-        let args = vec![unicode_key.to_string()];
+        let args = vec![unicode_key.clone()];
 
         let result = del_cmd.execute(&args, &store).await;
         match result {
@@ -879,8 +934,8 @@ mod tests {
         let store = create_test_store();
 
         // Create very long key and value
-        let long_key = "k".repeat(1000);
-        let long_value = "v".repeat(10000);
+        let long_key = bytes::Bytes::from("k".repeat(1000));
+        let long_value = bytes::Bytes::from("v".repeat(10000));
 
         // Test SET with long data
         let set_cmd = SetCommand;
@@ -911,7 +966,11 @@ mod tests {
     async fn test_set_nx_on_missing_key_writes() {
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "v".to_string(), "NX".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"NX"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
             result,
@@ -925,7 +984,11 @@ mod tests {
         let store = create_test_store();
         store.set("k", "old").await.unwrap();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string(), "NX".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"NX"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
             result,
@@ -939,7 +1002,11 @@ mod tests {
     async fn test_set_xx_on_missing_key_returns_nil() {
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "v".to_string(), "XX".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"XX"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
             result,
@@ -953,7 +1020,11 @@ mod tests {
         let store = create_test_store();
         store.set("k", "old").await.unwrap();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string(), "XX".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"XX"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
             result,
@@ -967,10 +1038,10 @@ mod tests {
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "v".to_string(),
-            "EX".to_string(),
-            "60".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"EX"),
+            bytes::Bytes::from_static(b"60"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
@@ -986,10 +1057,10 @@ mod tests {
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "v".to_string(),
-            "PX".to_string(),
-            "60000".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"PX"),
+            bytes::Bytes::from_static(b"60000"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
@@ -1005,10 +1076,10 @@ mod tests {
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "v".to_string(),
-            "EX".to_string(),
-            "0".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"EX"),
+            bytes::Bytes::from_static(b"0"),
         ];
         let result = cmd.execute(&args, &store).await;
         match result {
@@ -1027,7 +1098,11 @@ mod tests {
         assert!(initial > 100);
 
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string(), "KEEPTTL".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"KEEPTTL"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
             result,
@@ -1043,7 +1118,10 @@ mod tests {
         let store = create_test_store();
         store.set_with_ttl("k", "old", 120).await.unwrap();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+        ];
         let _ = cmd.execute(&args, &store).await;
         assert_eq!(store.ttl("k").unwrap(), -1);
     }
@@ -1053,7 +1131,11 @@ mod tests {
         let store = create_test_store();
         store.set("k", "old").await.unwrap();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string(), "GET".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"GET"),
+        ];
         let result = cmd.execute(&args, &store).await;
         match result {
             CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
@@ -1068,7 +1150,11 @@ mod tests {
     async fn test_set_get_on_missing_key_returns_nil() {
         let store = create_test_store();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string(), "GET".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"GET"),
+        ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
             result,
@@ -1085,10 +1171,10 @@ mod tests {
         store.set("k", "old").await.unwrap();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "new".to_string(),
-            "NX".to_string(),
-            "GET".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"NX"),
+            bytes::Bytes::from_static(b"GET"),
         ];
         let result = cmd.execute(&args, &store).await;
         match result {
@@ -1106,10 +1192,10 @@ mod tests {
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "v".to_string(),
-            "NX".to_string(),
-            "XX".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"NX"),
+            bytes::Bytes::from_static(b"XX"),
         ];
         let result = cmd.execute(&args, &store).await;
         match result {
@@ -1123,12 +1209,12 @@ mod tests {
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "v".to_string(),
-            "EX".to_string(),
-            "60".to_string(),
-            "PX".to_string(),
-            "1000".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"EX"),
+            bytes::Bytes::from_static(b"60"),
+            bytes::Bytes::from_static(b"PX"),
+            bytes::Bytes::from_static(b"1000"),
         ];
         let result = cmd.execute(&args, &store).await;
         match result {
@@ -1144,7 +1230,11 @@ mod tests {
         let store = create_test_store();
         store.hset("k", "f", "v").await.unwrap();
         let cmd = SetCommand;
-        let args = vec!["k".to_string(), "new".to_string(), "GET".to_string()];
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"new"),
+            bytes::Bytes::from_static(b"GET"),
+        ];
         let result = cmd.execute(&args, &store).await;
         match result {
             CommandResult::Error(msg) => assert!(msg.contains("WRONGTYPE"), "{msg}"),
@@ -1157,11 +1247,11 @@ mod tests {
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec![
-            "k".to_string(),
-            "v".to_string(),
-            "ex".to_string(),
-            "30".to_string(),
-            "nx".to_string(),
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"v"),
+            bytes::Bytes::from_static(b"ex"),
+            bytes::Bytes::from_static(b"30"),
+            bytes::Bytes::from_static(b"nx"),
         ];
         let result = cmd.execute(&args, &store).await;
         assert!(matches!(
@@ -1184,8 +1274,8 @@ mod tests {
         for i in 0..10 {
             let store_clone = Arc::clone(&store);
             join_set.spawn(async move {
-                let key = format!("key{i}");
-                let value = format!("value{i}");
+                let key = bytes::Bytes::from(format!("key{i}"));
+                let value = bytes::Bytes::from(format!("value{i}"));
 
                 // SET
                 let set_cmd = SetCommand;

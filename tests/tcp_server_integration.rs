@@ -476,3 +476,45 @@ async fn test_server_large_values() {
     drop(stream);
     server.shutdown().await.unwrap();
 }
+
+/// Stage 5 binary-safety end-to-end test.
+///
+/// SETs a key whose value contains arbitrary bytes (including embedded
+/// NUL and a non-UTF-8 sequence), GETs it back, and asserts the
+/// response BulkString carries the exact same byte sequence — proving
+/// the codec, registry dispatch, ValueType storage, and ResponseValue
+/// emission are all binary-safe end to end.
+#[tokio::test]
+async fn test_server_binary_safe_set_get() {
+    let (server, addr) = create_and_start_test_server().await;
+
+    let mut stream = TcpStream::connect(addr)
+        .await
+        .expect("Failed to connect to server");
+
+    // SET binkey <3 raw non-UTF-8 bytes 0xff 0x00 0xfe>
+    let payload: [u8; 3] = [0xFF, 0x00, 0xFE];
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$6\r\nbinkey\r\n$3\r\n");
+    frame.extend_from_slice(&payload);
+    frame.extend_from_slice(b"\r\n");
+    let response = send_command(&mut stream, &frame)
+        .await
+        .expect("Failed SET binary value");
+    assert_eq!(&response[..5], b"+OK\r\n");
+
+    // GET binkey
+    let response = send_command(&mut stream, b"*2\r\n$3\r\nGET\r\n$6\r\nbinkey\r\n")
+        .await
+        .expect("Failed GET binary value");
+
+    // Expected: $3\r\n<0xff><0x00><0xfe>\r\n
+    let mut expected = Vec::new();
+    expected.extend_from_slice(b"$3\r\n");
+    expected.extend_from_slice(&payload);
+    expected.extend_from_slice(b"\r\n");
+    assert_eq!(response, expected, "binary value did not round-trip");
+
+    drop(stream);
+    server.shutdown().await.unwrap();
+}
