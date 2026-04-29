@@ -1,17 +1,138 @@
 //! String command implementations (SET, GET, DEL, EXISTS)
 
 use crate::commands::{Command, CommandArity, CommandResult, ResponseValue};
-use crate::storage::MemoryStore;
+use crate::storage::{MemoryStore, SetExistence, SetTtlOption};
 use async_trait::async_trait;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// SET command implementation
-/// Sets a key to hold the string value
+///
+/// Supports the full Redis 7 option syntax:
+///
+/// `SET key value [NX | XX] [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | KEEPTTL] [GET]`
 pub struct SetCommand;
+
+#[derive(Debug, Default)]
+struct SetOptions {
+    ttl: SetTtlChoice,
+    existence: SetExistence,
+    get: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+enum SetTtlChoice {
+    #[default]
+    Default, // clears any existing TTL (Redis default)
+    KeepTtl,
+    Seconds(u64),
+    Milliseconds(u64),
+    UnixSeconds(u64),
+    UnixMilliseconds(u64),
+}
+
+fn parse_set_options(args: &[String]) -> std::result::Result<SetOptions, String> {
+    let mut opts = SetOptions::default();
+    let mut ttl_set = false;
+    let mut existence_set = false;
+    let mut i = 0;
+    while i < args.len() {
+        let token = args[i].to_ascii_uppercase();
+        match token.as_str() {
+            "NX" | "XX" => {
+                if existence_set {
+                    return Err("ERR syntax error".to_string());
+                }
+                opts.existence = if token == "NX" {
+                    SetExistence::OnlyIfNotExists
+                } else {
+                    SetExistence::OnlyIfExists
+                };
+                existence_set = true;
+                i += 1;
+            }
+            "KEEPTTL" => {
+                if ttl_set {
+                    return Err("ERR syntax error".to_string());
+                }
+                opts.ttl = SetTtlChoice::KeepTtl;
+                ttl_set = true;
+                i += 1;
+            }
+            "EX" | "PX" | "EXAT" | "PXAT" => {
+                if ttl_set {
+                    return Err("ERR syntax error".to_string());
+                }
+                if i + 1 >= args.len() {
+                    return Err("ERR syntax error".to_string());
+                }
+                let n = args[i + 1]
+                    .parse::<u64>()
+                    .map_err(|_| "ERR value is not an integer or out of range".to_string())?;
+                if matches!(token.as_str(), "EX" | "PX") && n == 0 {
+                    return Err("ERR invalid expire time in 'set' command".to_string());
+                }
+                opts.ttl = match token.as_str() {
+                    "EX" => SetTtlChoice::Seconds(n),
+                    "PX" => SetTtlChoice::Milliseconds(n),
+                    "EXAT" => SetTtlChoice::UnixSeconds(n),
+                    "PXAT" => SetTtlChoice::UnixMilliseconds(n),
+                    _ => unreachable!(),
+                };
+                ttl_set = true;
+                i += 2;
+            }
+            "GET" => {
+                if opts.get {
+                    return Err("ERR syntax error".to_string());
+                }
+                opts.get = true;
+                i += 1;
+            }
+            _ => return Err("ERR syntax error".to_string()),
+        }
+    }
+    Ok(opts)
+}
+
+/// Convert the parsed TTL choice into a `SetTtlOption` whose `At`
+/// variant is anchored to `Instant::now()`. Wall-clock options
+/// (`EXAT`/`PXAT`) are translated by computing the delta against
+/// `SystemTime::now()` and adding it to a freshly captured `Instant`,
+/// because `StoredValue::expires_at` is monotonic.
+fn resolve_ttl(choice: &SetTtlChoice) -> std::result::Result<SetTtlOption, String> {
+    match choice {
+        SetTtlChoice::Default => Ok(SetTtlOption::None),
+        SetTtlChoice::KeepTtl => Ok(SetTtlOption::KeepTtl),
+        SetTtlChoice::Seconds(n) => Ok(SetTtlOption::At(Instant::now() + Duration::from_secs(*n))),
+        SetTtlChoice::Milliseconds(n) => {
+            Ok(SetTtlOption::At(Instant::now() + Duration::from_millis(*n)))
+        }
+        SetTtlChoice::UnixSeconds(target) | SetTtlChoice::UnixMilliseconds(target) => {
+            let target_ms = match choice {
+                SetTtlChoice::UnixSeconds(n) => n.saturating_mul(1000),
+                SetTtlChoice::UnixMilliseconds(n) => *n,
+                _ => unreachable!(),
+            };
+            let _ = target;
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "ERR system clock error".to_string())?
+                .as_millis() as u64;
+            if target_ms <= now_ms {
+                // Past deadline: store with a deadline already in the
+                // past, which immediately reads as expired.
+                return Ok(SetTtlOption::At(Instant::now() - Duration::from_millis(1)));
+            }
+            let delta = Duration::from_millis(target_ms - now_ms);
+            Ok(SetTtlOption::At(Instant::now() + delta))
+        }
+    }
+}
 
 #[async_trait]
 impl Command for SetCommand {
     async fn execute(&self, args: &[String], store: &MemoryStore) -> CommandResult {
-        if args.len() != 2 {
+        if args.len() < 2 {
             return CommandResult::Error(
                 "ERR wrong number of arguments for 'SET' command".to_string(),
             );
@@ -20,8 +141,43 @@ impl Command for SetCommand {
         let key = &args[0];
         let value = &args[1];
 
-        match store.set(key, value.as_str()).await {
-            Ok(()) => CommandResult::Ok(ResponseValue::SimpleString("OK".to_string())),
+        let opts = match parse_set_options(&args[2..]) {
+            Ok(o) => o,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let ttl = match resolve_ttl(&opts.ttl) {
+            Ok(t) => t,
+            Err(e) => return CommandResult::Error(e),
+        };
+
+        match store
+            .set_with_options(key.as_str(), value.as_str(), ttl, opts.existence)
+            .await
+        {
+            Ok(outcome) => {
+                if opts.get {
+                    // GET: return the previous value (or nil), regardless
+                    // of whether the write was applied.
+                    match outcome.previous {
+                        Some(sv) => match &sv.value {
+                            crate::storage::ValueType::String(_)
+                            | crate::storage::ValueType::Integer(_) => {
+                                CommandResult::Ok(ResponseValue::bulk(sv.value.to_string()))
+                            }
+                            _ => CommandResult::Error(
+                                "WRONGTYPE Operation against a key holding the wrong kind of value"
+                                    .to_string(),
+                            ),
+                        },
+                        None => CommandResult::Ok(ResponseValue::nil_bulk()),
+                    }
+                } else if outcome.applied {
+                    CommandResult::Ok(ResponseValue::SimpleString("OK".to_string()))
+                } else {
+                    // NX/XX failed: Redis returns nil bulk.
+                    CommandResult::Ok(ResponseValue::nil_bulk())
+                }
+            }
             Err(e) => CommandResult::Error(e.to_client_error()),
         }
     }
@@ -31,7 +187,8 @@ impl Command for SetCommand {
     }
 
     fn arity(&self) -> CommandArity {
-        CommandArity::Fixed(3) // SET key value
+        // SET key value [options...] — at least 3 args including command name.
+        CommandArity::AtLeast(3)
     }
 }
 
@@ -220,7 +377,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_command_wrong_args_too_many() {
+    async fn test_set_command_unknown_option() {
+        // With option support a third arg that isn't a recognized
+        // option keyword now produces a `syntax error`, not a
+        // `wrong number of arguments` error — Redis behaves this way.
         let store = create_test_store();
         let cmd = SetCommand;
         let args = vec!["key".to_string(), "value".to_string(), "extra".to_string()];
@@ -229,9 +389,9 @@ mod tests {
 
         match result {
             CommandResult::Error(msg) => {
-                assert!(msg.contains("wrong number of arguments"));
+                assert!(msg.contains("syntax error"), "got: {msg}");
             }
-            _ => panic!("Expected error for wrong number of arguments"),
+            _ => panic!("Expected syntax error for unrecognized option"),
         }
     }
 
@@ -259,7 +419,9 @@ mod tests {
     fn test_set_command_properties() {
         let cmd = SetCommand;
         assert_eq!(cmd.name(), "SET");
-        assert_eq!(cmd.arity(), CommandArity::Fixed(3));
+        // SET key value [option ...] — at least 3 args after Stage 8
+        // option support; previously Fixed(3).
+        assert_eq!(cmd.arity(), CommandArity::AtLeast(3));
     }
 
     // GET command tests
@@ -741,6 +903,272 @@ mod tests {
             }
             _ => panic!("Expected long value from GET command"),
         }
+    }
+
+    // SET option tests (Stage 8: NX/XX/EX/PX/EXAT/PXAT/KEEPTTL/GET)
+
+    #[tokio::test]
+    async fn test_set_nx_on_missing_key_writes() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "v".to_string(), "NX".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString(_))
+        ));
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "v");
+    }
+
+    #[tokio::test]
+    async fn test_set_nx_on_existing_key_returns_nil() {
+        let store = create_test_store();
+        store.set("k", "old").await.unwrap();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string(), "NX".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::BulkString(None))
+        ));
+        // Old value preserved.
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "old");
+    }
+
+    #[tokio::test]
+    async fn test_set_xx_on_missing_key_returns_nil() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "v".to_string(), "XX".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::BulkString(None))
+        ));
+        assert!(store.get("k").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_xx_on_existing_key_writes() {
+        let store = create_test_store();
+        store.set("k", "old").await.unwrap();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string(), "XX".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString(_))
+        ));
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "new");
+    }
+
+    #[tokio::test]
+    async fn test_set_ex_applies_ttl_in_seconds() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "v".to_string(),
+            "EX".to_string(),
+            "60".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString(_))
+        ));
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl > 0 && ttl <= 60, "ttl {ttl}");
+    }
+
+    #[tokio::test]
+    async fn test_set_px_applies_ttl_in_milliseconds() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "v".to_string(),
+            "PX".to_string(),
+            "60000".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString(_))
+        ));
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl > 0 && ttl <= 60, "ttl {ttl}");
+    }
+
+    #[tokio::test]
+    async fn test_set_ex_zero_rejected() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "v".to_string(),
+            "EX".to_string(),
+            "0".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(msg.contains("invalid expire time"), "got {msg}");
+            }
+            _ => panic!("expected EX 0 to be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_keepttl_preserves_existing_ttl() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "old", 120).await.unwrap();
+        let initial = store.ttl("k").unwrap();
+        assert!(initial > 100);
+
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string(), "KEEPTTL".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString(_))
+        ));
+        let after = store.ttl("k").unwrap();
+        assert!(after > 100, "ttl should be preserved, got {after}");
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "new");
+    }
+
+    #[tokio::test]
+    async fn test_set_default_clears_existing_ttl() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "old", 120).await.unwrap();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string()];
+        let _ = cmd.execute(&args, &store).await;
+        assert_eq!(store.ttl("k").unwrap(), -1);
+    }
+
+    #[tokio::test]
+    async fn test_set_get_returns_previous_value() {
+        let store = create_test_store();
+        store.set("k", "old").await.unwrap();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string(), "GET".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
+                assert_eq!(v, "old");
+            }
+            other => panic!("expected old value, got {other:?}"),
+        }
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "new");
+    }
+
+    #[tokio::test]
+    async fn test_set_get_on_missing_key_returns_nil() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string(), "GET".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::BulkString(None))
+        ));
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "new");
+    }
+
+    #[tokio::test]
+    async fn test_set_nx_get_returns_previous_even_when_skipped() {
+        // Per Redis spec: GET reports the prior value even if NX/XX
+        // caused the write to be skipped.
+        let store = create_test_store();
+        store.set("k", "old").await.unwrap();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "new".to_string(),
+            "NX".to_string(),
+            "GET".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::BulkString(Some(v))) => {
+                assert_eq!(v, "old");
+            }
+            other => panic!("expected old value, got {other:?}"),
+        }
+        // Value not overwritten.
+        assert_eq!(store.get("k").unwrap().unwrap().value.to_string(), "old");
+    }
+
+    #[tokio::test]
+    async fn test_set_conflicting_nx_xx_rejected() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "v".to_string(),
+            "NX".to_string(),
+            "XX".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Error(msg) => assert!(msg.contains("syntax error"), "{msg}"),
+            _ => panic!("expected syntax error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_conflicting_ttl_options_rejected() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "v".to_string(),
+            "EX".to_string(),
+            "60".to_string(),
+            "PX".to_string(),
+            "1000".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Error(msg) => assert!(msg.contains("syntax error"), "{msg}"),
+            _ => panic!("expected syntax error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_get_on_hash_returns_wrongtype() {
+        // GET option must surface WRONGTYPE if the prior value isn't
+        // a string/integer (matches Redis).
+        let store = create_test_store();
+        store.hset("k", "f", "v").await.unwrap();
+        let cmd = SetCommand;
+        let args = vec!["k".to_string(), "new".to_string(), "GET".to_string()];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Error(msg) => assert!(msg.contains("WRONGTYPE"), "{msg}"),
+            _ => panic!("expected WRONGTYPE"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_options_lowercase_accepted() {
+        let store = create_test_store();
+        let cmd = SetCommand;
+        let args = vec![
+            "k".to_string(),
+            "v".to_string(),
+            "ex".to_string(),
+            "30".to_string(),
+            "nx".to_string(),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        assert!(matches!(
+            result,
+            CommandResult::Ok(ResponseValue::SimpleString(_))
+        ));
+        assert!(store.ttl("k").unwrap() > 0);
     }
 
     // Concurrent access tests

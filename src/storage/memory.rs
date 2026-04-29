@@ -244,6 +244,41 @@ impl ValueMetadata {
     }
 }
 
+/// Existence constraint for `SET` (Redis NX/XX semantics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SetExistence {
+    /// Always overwrite (default `SET key value`).
+    #[default]
+    Always,
+    /// Only set if the key does not currently exist (`NX`).
+    OnlyIfNotExists,
+    /// Only set if the key currently exists (`XX`).
+    OnlyIfExists,
+}
+
+/// TTL handling for `SET`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetTtlOption {
+    /// Clear any existing TTL (default `SET key value`).
+    None,
+    /// Apply this absolute deadline (caller resolves `EX`/`PX`/`EXAT`/`PXAT` → `Instant`).
+    At(Instant),
+    /// Preserve the key's current TTL on overwrite (`KEEPTTL`).
+    KeepTtl,
+}
+
+/// Result of a `SET` with options.
+///
+/// `applied` distinguishes the NX/XX-rejected case from the success
+/// case. `previous` carries the prior value for the `GET` option,
+/// which Redis specifies must be returned even when the write itself
+/// was skipped.
+#[derive(Debug, Clone)]
+pub struct SetOutcome {
+    pub applied: bool,
+    pub previous: Option<StoredValue>,
+}
+
 /// Stored value with metadata
 #[derive(Debug, Clone)]
 pub struct StoredValue {
@@ -297,6 +332,116 @@ impl MemoryStore {
         self.data.insert(key_string, stored_value);
 
         Ok(())
+    }
+
+    /// Apply a `SET key value [options]` atomically.
+    ///
+    /// The command-level options are evaluated under a single
+    /// per-shard write lock so concurrent NX/XX/GET observers never see
+    /// a partial state. Returns a `SetOutcome` describing whether the
+    /// new value was written and what (if anything) was previously
+    /// stored — the latter is needed for the `GET` option, which must
+    /// return the prior value even when NX/XX caused the write to be
+    /// skipped.
+    pub async fn set_with_options<K, V>(
+        &self,
+        key: K,
+        value: V,
+        ttl: SetTtlOption,
+        existence: SetExistence,
+    ) -> Result<SetOutcome>
+    where
+        K: Into<String>,
+        V: Into<ValueType>,
+    {
+        let key_string = key.into();
+        let value_type = value.into();
+
+        // Resolve KeepTtl now (if the key is gone or has no TTL the
+        // option becomes a no-op equivalent to "no TTL").
+        let resolved_ttl: Option<Instant> = match ttl {
+            SetTtlOption::None => None,
+            SetTtlOption::At(at) => Some(at),
+            SetTtlOption::KeepTtl => self.data.get(&key_string).and_then(|e| {
+                if e.is_expired() {
+                    None
+                } else {
+                    e.expires_at
+                }
+            }),
+        };
+
+        let outcome = match self.data.entry(key_string.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => {
+                // Treat expired-but-not-yet-evicted as "missing" for
+                // existence checks — Redis behaves this way: a key with
+                // a passed TTL is observationally absent.
+                let expired = entry.get().is_expired();
+                let logically_present = !expired;
+
+                let allowed = match existence {
+                    SetExistence::Always => true,
+                    SetExistence::OnlyIfNotExists => !logically_present,
+                    SetExistence::OnlyIfExists => logically_present,
+                };
+
+                if !allowed {
+                    // Surface the previous value (or None for expired)
+                    // so the caller's GET option can still read it.
+                    let previous = if logically_present {
+                        Some(entry.get().clone())
+                    } else {
+                        None
+                    };
+                    SetOutcome {
+                        applied: false,
+                        previous,
+                    }
+                } else {
+                    let previous = if logically_present {
+                        Some(entry.get().clone())
+                    } else {
+                        None
+                    };
+                    let stored_value = match resolved_ttl {
+                        Some(at) => StoredValue::new_with_expiration(value_type, at),
+                        None => StoredValue::new(value_type),
+                    };
+                    if let Some(at) = resolved_ttl {
+                        self.expiration_index.insert(key_string.clone(), at);
+                    } else {
+                        self.expiration_index.remove(&key_string);
+                    }
+                    entry.insert(stored_value);
+                    SetOutcome {
+                        applied: true,
+                        previous,
+                    }
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(entry) => match existence {
+                SetExistence::OnlyIfExists => SetOutcome {
+                    applied: false,
+                    previous: None,
+                },
+                _ => {
+                    let stored_value = match resolved_ttl {
+                        Some(at) => StoredValue::new_with_expiration(value_type, at),
+                        None => StoredValue::new(value_type),
+                    };
+                    if let Some(at) = resolved_ttl {
+                        self.expiration_index.insert(key_string.clone(), at);
+                    }
+                    entry.insert(stored_value);
+                    SetOutcome {
+                        applied: true,
+                        previous: None,
+                    }
+                }
+            },
+        };
+
+        Ok(outcome)
     }
 
     /// Set a key-value pair with TTL in seconds
