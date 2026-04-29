@@ -35,9 +35,10 @@ pub use storage::{replay_aof_file, MemoryStore, PersistenceManager, StoredValue,
 use crate::network::ConnectionPool;
 use commands::{
     DbsizeCommand, DecrCommand, DelCommand, EchoCommand, ExistsCommand, ExpireCommand,
-    FlushdbCommand, GetCommand, HdelCommand, HexistsCommand, HgetCommand, HgetallCommand,
-    HkeysCommand, HlenCommand, HmgetCommand, HsetCommand, HvalsCommand, IncrCommand, InfoCommand,
-    KeysCommand, MgetCommand, MsetCommand, PingCommand, SetCommand, TtlCommand, TypeCommand,
+    ExpireatCommand, FlushdbCommand, GetCommand, HdelCommand, HexistsCommand, HgetCommand,
+    HgetallCommand, HkeysCommand, HlenCommand, HmgetCommand, HsetCommand, HvalsCommand,
+    IncrCommand, InfoCommand, KeysCommand, MgetCommand, MsetCommand, PexpireCommand,
+    PexpireatCommand, PingCommand, PttlCommand, SetCommand, TtlCommand, TypeCommand,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -98,6 +99,10 @@ impl RustyPotatoServer {
         // Register TTL commands
         command_registry.register(Box::new(ExpireCommand));
         command_registry.register(Box::new(TtlCommand));
+        command_registry.register(Box::new(PttlCommand));
+        command_registry.register(Box::new(PexpireCommand));
+        command_registry.register(Box::new(ExpireatCommand));
+        command_registry.register(Box::new(PexpireatCommand));
 
         // Register atomic integer commands
         command_registry.register(Box::new(IncrCommand));
@@ -192,6 +197,9 @@ impl RustyPotatoServer {
         replay_registry.register(Box::new(MsetCommand));
         replay_registry.register(Box::new(ExpireCommand));
         replay_registry.register(Box::new(TtlCommand));
+        replay_registry.register(Box::new(PexpireCommand));
+        replay_registry.register(Box::new(ExpireatCommand));
+        replay_registry.register(Box::new(PexpireatCommand));
         replay_registry.register(Box::new(IncrCommand));
         replay_registry.register(Box::new(DecrCommand));
         replay_registry.register(Box::new(HsetCommand));
@@ -375,7 +383,8 @@ mod tests {
         // 13 base commands + PING/ECHO/DBSIZE/TYPE/FLUSHDB/INFO/KEYS = 20
         // + HMGET/HKEYS/HVALS/HLEN (Stage 8 partial 3) = 24
         // + MGET/MSET (Stage 7 partial 5) = 26
-        assert_eq!(stats.registered_commands, 26);
+        // + PTTL/PEXPIRE/EXPIREAT/PEXPIREAT (Stage 8 partial 4) = 30
+        assert_eq!(stats.registered_commands, 30);
         assert!(stats.command_names.contains(&"SET".to_string()));
         assert!(stats.command_names.contains(&"GET".to_string()));
         assert!(stats.command_names.contains(&"INCR".to_string()));
@@ -385,6 +394,10 @@ mod tests {
         assert!(stats.command_names.contains(&"HLEN".to_string()));
         assert!(stats.command_names.contains(&"MGET".to_string()));
         assert!(stats.command_names.contains(&"MSET".to_string()));
+        assert!(stats.command_names.contains(&"PTTL".to_string()));
+        assert!(stats.command_names.contains(&"PEXPIRE".to_string()));
+        assert!(stats.command_names.contains(&"EXPIREAT".to_string()));
+        assert!(stats.command_names.contains(&"PEXPIREAT".to_string()));
         assert_eq!(stats.config_summary, "127.0.0.1:6379");
     }
 
@@ -394,7 +407,7 @@ mod tests {
         let server = RustyPotatoServer::new(config).unwrap();
 
         // Test that we can access the storage and command registry
-        assert_eq!(server.command_registry().command_count(), 26);
+        assert_eq!(server.command_registry().command_count(), 30);
         assert!(server.command_registry().has_command("SET"));
         assert!(server.command_registry().has_command("GET"));
         assert!(server.command_registry().has_command("HSET"));
@@ -405,6 +418,10 @@ mod tests {
         assert!(server.command_registry().has_command("HLEN"));
         assert!(server.command_registry().has_command("MGET"));
         assert!(server.command_registry().has_command("MSET"));
+        assert!(server.command_registry().has_command("PTTL"));
+        assert!(server.command_registry().has_command("PEXPIRE"));
+        assert!(server.command_registry().has_command("EXPIREAT"));
+        assert!(server.command_registry().has_command("PEXPIREAT"));
         assert!(server.command_registry().has_command("PING"));
         assert!(server.command_registry().has_command("ECHO"));
     }

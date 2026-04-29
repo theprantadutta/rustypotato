@@ -723,6 +723,79 @@ impl MemoryStore {
         }
     }
 
+    /// Get the remaining TTL in milliseconds. Returns -2 if the key
+    /// doesn't exist (or has just expired), -1 if the key has no TTL.
+    /// Mirrors Redis `PTTL`.
+    pub fn pttl<K>(&self, key: K) -> Result<i64>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(entry) = self.data.get(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete_sync(key_str)?;
+                return Ok(-2);
+            }
+
+            Ok(entry.ttl_millis().unwrap_or(-1))
+        } else {
+            Ok(-2)
+        }
+    }
+
+    /// Apply an absolute deadline as the key's TTL, conditional on
+    /// `flag`. Mirrors `expire_with_options` but takes an `Instant`
+    /// rather than a `u64` seconds-from-now — used by the EXPIREAT /
+    /// PEXPIREAT command path, where the caller has already resolved
+    /// the wall-clock target into a monotonic instant.
+    pub async fn expire_at_with_options<K>(
+        &self,
+        key: K,
+        new_expires_at: Instant,
+        flag: ExpireFlag,
+    ) -> Result<bool>
+    where
+        K: AsRef<str>,
+    {
+        let key_str = key.as_ref();
+
+        if let Some(mut entry) = self.data.get_mut(key_str) {
+            if entry.is_expired() {
+                drop(entry);
+                self.delete(key_str).await?;
+                return Ok(false);
+            }
+
+            let current = entry.expires_at;
+            let should_apply = match flag {
+                ExpireFlag::None => true,
+                ExpireFlag::Nx => current.is_none(),
+                ExpireFlag::Xx => current.is_some(),
+                ExpireFlag::Gt => match current {
+                    Some(c) => new_expires_at > c,
+                    None => false,
+                },
+                ExpireFlag::Lt => match current {
+                    Some(c) => new_expires_at < c,
+                    None => true,
+                },
+            };
+
+            if !should_apply {
+                return Ok(false);
+            }
+
+            entry.set_expiration(new_expires_at);
+            self.expiration_index
+                .insert(key_str.to_string(), new_expires_at);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Remove expiration from a key
     pub fn persist<K>(&self, key: K) -> Result<bool>
     where
@@ -1197,6 +1270,20 @@ impl StoredValue {
             let now = Instant::now();
             if expires > now {
                 (expires - now).as_secs() as i64
+            } else {
+                -2 // Expired
+            }
+        })
+    }
+
+    /// Get remaining TTL in milliseconds, returns None if no expiration
+    /// set. Saturates at i64::MAX for absurdly distant deadlines, so
+    /// the cast is safe.
+    pub fn ttl_millis(&self) -> Option<i64> {
+        self.expires_at.map(|expires| {
+            let now = Instant::now();
+            if expires > now {
+                (expires - now).as_millis().min(i64::MAX as u128) as i64
             } else {
                 -2 // Expired
             }

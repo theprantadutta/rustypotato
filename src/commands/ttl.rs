@@ -1,10 +1,12 @@
-//! TTL command implementations (EXPIRE, TTL)
+//! TTL command implementations
+//! (EXPIRE, TTL, PTTL, PEXPIRE, EXPIREAT, PEXPIREAT)
 
 use crate::commands::registry::Args;
 use crate::commands::{arg_str, Command, CommandArity, CommandResult, ResponseValue};
 use crate::storage::{ExpireFlag, MemoryStore};
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// EXPIRE command implementation
 ///
@@ -83,6 +85,190 @@ impl Command for ExpireCommand {
     }
 }
 
+/// `PEXPIRE key milliseconds [NX | XX | GT | LT]` — like EXPIRE but
+/// the deadline is specified in milliseconds.
+pub struct PexpireCommand;
+
+#[async_trait]
+impl Command for PexpireCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() < 2 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'PEXPIRE' command".to_string(),
+            );
+        }
+
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let ms_str = match arg_str(args, 1) {
+            Ok(s) => s,
+            Err(_) => {
+                return CommandResult::Error(
+                    "ERR value is not an integer or out of range".to_string(),
+                )
+            }
+        };
+        let millis = match ms_str.parse::<u64>() {
+            Ok(n) => n,
+            Err(_) => {
+                return CommandResult::Error(
+                    "ERR value is not an integer or out of range".to_string(),
+                )
+            }
+        };
+        let flag = match parse_expire_flag(&args[2..]) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
+
+        let deadline = Instant::now() + Duration::from_millis(millis);
+        match store.expire_at_with_options(key, deadline, flag).await {
+            Ok(true) => CommandResult::Ok(ResponseValue::Integer(1)),
+            Ok(false) => CommandResult::Ok(ResponseValue::Integer(0)),
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "PEXPIRE"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Range(3, 4)
+    }
+}
+
+/// Resolve a wall-clock target (seconds or milliseconds since the
+/// Unix epoch) into a monotonic `Instant`. Targets in the past
+/// produce an instant 1ms in the past, which immediately reads as
+/// expired (matches Redis: `EXPIREAT key 0` deletes immediately).
+fn resolve_unix_target(target_ms: u64) -> std::result::Result<Instant, String> {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "ERR system clock error".to_string())?
+        .as_millis() as u64;
+    if target_ms <= now_ms {
+        return Ok(Instant::now() - Duration::from_millis(1));
+    }
+    let delta = Duration::from_millis(target_ms - now_ms);
+    Ok(Instant::now() + delta)
+}
+
+/// `EXPIREAT key unix-time-seconds [NX | XX | GT | LT]` — set TTL
+/// using an absolute Unix timestamp in seconds.
+pub struct ExpireatCommand;
+
+#[async_trait]
+impl Command for ExpireatCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() < 2 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'EXPIREAT' command".to_string(),
+            );
+        }
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let secs_str = match arg_str(args, 1) {
+            Ok(s) => s,
+            Err(_) => {
+                return CommandResult::Error(
+                    "ERR value is not an integer or out of range".to_string(),
+                )
+            }
+        };
+        let secs = match secs_str.parse::<u64>() {
+            Ok(n) => n,
+            Err(_) => {
+                return CommandResult::Error(
+                    "ERR value is not an integer or out of range".to_string(),
+                )
+            }
+        };
+        let flag = match parse_expire_flag(&args[2..]) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let target_ms = secs.saturating_mul(1000);
+        let deadline = match resolve_unix_target(target_ms) {
+            Ok(d) => d,
+            Err(e) => return CommandResult::Error(e),
+        };
+        match store.expire_at_with_options(key, deadline, flag).await {
+            Ok(true) => CommandResult::Ok(ResponseValue::Integer(1)),
+            Ok(false) => CommandResult::Ok(ResponseValue::Integer(0)),
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "EXPIREAT"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Range(3, 4)
+    }
+}
+
+/// `PEXPIREAT key unix-time-milliseconds [NX | XX | GT | LT]` — set
+/// TTL using an absolute Unix timestamp in milliseconds.
+pub struct PexpireatCommand;
+
+#[async_trait]
+impl Command for PexpireatCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() < 2 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'PEXPIREAT' command".to_string(),
+            );
+        }
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let ms_str = match arg_str(args, 1) {
+            Ok(s) => s,
+            Err(_) => {
+                return CommandResult::Error(
+                    "ERR value is not an integer or out of range".to_string(),
+                )
+            }
+        };
+        let target_ms = match ms_str.parse::<u64>() {
+            Ok(n) => n,
+            Err(_) => {
+                return CommandResult::Error(
+                    "ERR value is not an integer or out of range".to_string(),
+                )
+            }
+        };
+        let flag = match parse_expire_flag(&args[2..]) {
+            Ok(f) => f,
+            Err(e) => return CommandResult::Error(e),
+        };
+        let deadline = match resolve_unix_target(target_ms) {
+            Ok(d) => d,
+            Err(e) => return CommandResult::Error(e),
+        };
+        match store.expire_at_with_options(key, deadline, flag).await {
+            Ok(true) => CommandResult::Ok(ResponseValue::Integer(1)),
+            Ok(false) => CommandResult::Ok(ResponseValue::Integer(0)),
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "PEXPIREAT"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Range(3, 4)
+    }
+}
+
 /// TTL command implementation
 /// Returns the remaining time to live of a key that has a timeout.
 pub struct TtlCommand;
@@ -113,6 +299,42 @@ impl Command for TtlCommand {
 
     fn arity(&self) -> CommandArity {
         CommandArity::Fixed(2) // TTL key
+    }
+
+    fn is_mutation(&self) -> bool {
+        false
+    }
+}
+
+/// `PTTL key` — like TTL but returns the remaining time in
+/// milliseconds. Same special return values: -2 (no key), -1 (no
+/// expiration).
+pub struct PttlCommand;
+
+#[async_trait]
+impl Command for PttlCommand {
+    async fn execute(&self, args: Args<'_>, store: &MemoryStore) -> CommandResult {
+        if args.len() != 1 {
+            return CommandResult::Error(
+                "ERR wrong number of arguments for 'PTTL' command".to_string(),
+            );
+        }
+        let key = match arg_str(args, 0) {
+            Ok(k) => k,
+            Err(e) => return CommandResult::Error(e),
+        };
+        match store.pttl(key) {
+            Ok(ms) => CommandResult::Ok(ResponseValue::Integer(ms)),
+            Err(e) => CommandResult::Error(e.to_client_error()),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "PTTL"
+    }
+
+    fn arity(&self) -> CommandArity {
+        CommandArity::Fixed(2)
     }
 
     fn is_mutation(&self) -> bool {
@@ -923,5 +1145,182 @@ mod tests {
             let ttl = store.ttl(&key).unwrap();
             assert!(ttl > 0, "Expected positive TTL for key {key}, got {ttl}");
         }
+    }
+
+    // PTTL / PEXPIRE / EXPIREAT / PEXPIREAT tests (Stage 8 partial 4)
+
+    #[tokio::test]
+    async fn test_pttl_returns_milliseconds() {
+        let store = create_test_store();
+        store.set_with_ttl("k", "v", 60).await.unwrap();
+
+        let cmd = PttlCommand;
+        let args = vec![bytes::Bytes::from_static(b"k")];
+        let result = cmd.execute(&args, &store).await;
+        match result {
+            CommandResult::Ok(ResponseValue::Integer(ms)) => {
+                // 60s = 60_000ms; allow ±1s slack for test latency.
+                assert!(
+                    (59_000..=60_000).contains(&ms),
+                    "expected ~60_000ms, got {ms}"
+                );
+            }
+            other => panic!("expected integer ms, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pttl_negative_for_no_ttl_and_missing_key() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        let cmd = PttlCommand;
+        // Key without expiration → -1
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"k")], &store)
+            .await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(-1)));
+
+        // Missing key → -2
+        let result = cmd
+            .execute(&[bytes::Bytes::from_static(b"missing")], &store)
+            .await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(-2)));
+    }
+
+    #[tokio::test]
+    async fn test_pexpire_applies_ttl_in_milliseconds() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        let cmd = PexpireCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"30000"),
+        ];
+        let result = cmd.execute(&args, &store).await;
+        assert_eq!(result, CommandResult::Ok(ResponseValue::Integer(1)));
+
+        let pttl = store.pttl("k").unwrap();
+        assert!(
+            (29_000..=30_000).contains(&pttl),
+            "expected pttl ~30_000ms, got {pttl}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pexpire_with_xx_flag_rejects_keys_without_ttl() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        let cmd = PexpireCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"5000"),
+            bytes::Bytes::from_static(b"XX"),
+        ];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(0))
+        );
+        assert_eq!(store.ttl("k").unwrap(), -1);
+    }
+
+    #[tokio::test]
+    async fn test_expireat_with_far_future_unix_seconds() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        // 100 seconds from now in Unix-seconds.
+        let target = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 100;
+
+        let cmd = ExpireatCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from(target.to_string()),
+        ];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        let ttl = store.ttl("k").unwrap();
+        assert!(ttl > 90 && ttl <= 100, "ttl should be ~100s, got {ttl}");
+    }
+
+    #[tokio::test]
+    async fn test_expireat_past_timestamp_deletes_immediately() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        let cmd = ExpireatCommand;
+        // 0 = the epoch — definitely in the past.
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"0"),
+        ];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        // Key reads as missing because the deadline is in the past.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(!store.exists("k").unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_pexpireat_with_far_future_unix_millis() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        let target_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            + 50_000; // +50s in ms
+
+        let cmd = PexpireatCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from(target_ms.to_string()),
+        ];
+        assert_eq!(
+            cmd.execute(&args, &store).await,
+            CommandResult::Ok(ResponseValue::Integer(1))
+        );
+        let pttl = store.pttl("k").unwrap();
+        assert!(
+            pttl > 40_000 && pttl <= 50_000,
+            "pttl should be ~50_000ms, got {pttl}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_expireat_unknown_flag_rejected() {
+        let store = create_test_store();
+        store.set("k", "v").await.unwrap();
+
+        let cmd = ExpireatCommand;
+        let args = vec![
+            bytes::Bytes::from_static(b"k"),
+            bytes::Bytes::from_static(b"9999999999"),
+            bytes::Bytes::from_static(b"FOO"),
+        ];
+        match cmd.execute(&args, &store).await {
+            CommandResult::Error(msg) => assert!(msg.contains("syntax error"), "{msg}"),
+            _ => panic!("expected syntax error"),
+        }
+    }
+
+    #[test]
+    fn test_new_ttl_commands_mutation_flags() {
+        // PTTL is read-only; PEXPIRE/EXPIREAT/PEXPIREAT all mutate.
+        assert!(!PttlCommand.is_mutation());
+        assert!(PexpireCommand.is_mutation());
+        assert!(ExpireatCommand.is_mutation());
+        assert!(PexpireatCommand.is_mutation());
     }
 }

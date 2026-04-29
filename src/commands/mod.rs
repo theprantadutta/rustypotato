@@ -24,7 +24,9 @@ pub use server::{
     DbsizeCommand, EchoCommand, FlushdbCommand, InfoCommand, KeysCommand, PingCommand, TypeCommand,
 };
 pub use string::{DelCommand, ExistsCommand, GetCommand, MgetCommand, MsetCommand, SetCommand};
-pub use ttl::{ExpireCommand, TtlCommand};
+pub use ttl::{
+    ExpireCommand, ExpireatCommand, PexpireCommand, PexpireatCommand, PttlCommand, TtlCommand,
+};
 
 use bytes::Bytes;
 
