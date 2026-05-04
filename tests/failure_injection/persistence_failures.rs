@@ -21,7 +21,6 @@ fn create_test_config(aof_path: PathBuf) -> Config {
             aof_enabled: true,
             aof_path,
             aof_fsync_policy: FsyncPolicy::Always,
-            memory_limit: None,
         },
         ..Default::default()
     }

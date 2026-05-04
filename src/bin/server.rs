@@ -279,12 +279,6 @@ fn validate_environment(config: &Config) -> Result<(), Box<dyn std::error::Error
         }
     }
 
-    // Check available memory if memory limit is set
-    if let Some(limit) = config.storage.memory_limit {
-        debug!("Memory limit configured: {} bytes", limit);
-        // In a production system, we would check available system memory here
-    }
-
     Ok(())
 }
 
@@ -429,13 +423,6 @@ fn display_startup_info(config: &Config) {
             config.storage.aof_fsync_policy
         );
     }
-    info!(
-        "  • Memory Limit: {}",
-        config
-            .storage
-            .memory_limit
-            .map_or("unlimited".to_string(), |n| format!("{n} bytes"))
-    );
     info!("");
     info!("Network Configuration:");
     info!("  • TCP NoDelay: {}", config.network.tcp_nodelay);

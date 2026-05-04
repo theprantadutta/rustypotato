@@ -13,9 +13,9 @@ aof_enabled = true
 aof_path = "/data/rustypotato.aof"
 aof_fsync = "everysec"  # always, everysec, no
 
-# Memory settings
-max_memory = "1GB"
-eviction_policy = "lru"  # lru, lfu, random, ttl
+# Memory: RustyPotato has no in-process memory cap. Bound resident memory
+# via the container's resource limits (docker --memory, Kubernetes
+# resources.limits.memory). LRU eviction is on the roadmap.
 
 [logging]
 level = "info"  # trace, debug, info, warn, error

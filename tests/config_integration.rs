@@ -106,7 +106,6 @@ max_connections = 5000
 
 [storage]
 aof_enabled = false
-memory_limit = 1073741824
 
 [logging]
 level = "debug"
@@ -120,7 +119,6 @@ level = "debug"
     assert_eq!(config.server.bind_address, "0.0.0.0");
     assert_eq!(config.server.max_connections, 5000);
     assert!(!config.storage.aof_enabled);
-    assert_eq!(config.storage.memory_limit, Some(1073741824));
     assert_eq!(config.logging.level, "debug");
 
     // Restore original environment state

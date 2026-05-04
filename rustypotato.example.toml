@@ -27,8 +27,9 @@ aof_path = "rustypotato.aof"
 # AOF fsync policy: "Always", "EverySecond", or "Never" (default: "EverySecond")
 aof_fsync_policy = "EverySecond"
 
-# Memory limit in bytes (default: unlimited)
-# memory_limit = 1073741824  # 1GB
+# RustyPotato has no in-process memory limit. To bound resident memory in
+# production, run under a cgroup limit (Kubernetes resources.limits.memory,
+# systemd MemoryMax=, or equivalent). LRU eviction is on the roadmap.
 
 [network]
 # Enable TCP_NODELAY (default: true)

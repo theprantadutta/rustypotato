@@ -710,7 +710,6 @@ mod tests {
                 aof_enabled: true,
                 aof_path: path,
                 aof_fsync_policy: FsyncPolicy::Always,
-                memory_limit: None,
             },
             ..Default::default()
         }

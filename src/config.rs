@@ -27,13 +27,23 @@ pub struct ServerConfig {
     pub worker_threads: Option<usize>,
 }
 
-/// Storage configuration
+/// Storage configuration.
+///
+/// Note on memory limits: a `memory_limit` field used to live here, but
+/// nothing actually enforced it — the validator checked the minimum and
+/// the startup banner printed it, then the value was discarded. Rather
+/// than ship a knob that quietly does nothing, the field has been
+/// removed. To bound RustyPotato's resident memory in production today,
+/// run it under a cgroup memory limit / a Kubernetes
+/// `resources.limits.memory` / a systemd `MemoryMax=` and let the
+/// kernel OOM-kill it when it exceeds the bound. A future stage can
+/// reintroduce the field once an actual LRU eviction loop exists to
+/// honor it (sampler design sketched in `plans/refactor.md` stage 10).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub aof_enabled: bool,
     pub aof_path: PathBuf,
     pub aof_fsync_policy: FsyncPolicy,
-    pub memory_limit: Option<usize>,
 }
 
 /// Network configuration
@@ -119,7 +129,6 @@ impl Default for StorageConfig {
             aof_enabled: true,
             aof_path: PathBuf::from("rustypotato.aof"),
             aof_fsync_policy: FsyncPolicy::EverySecond,
-            memory_limit: None,
         }
     }
 }
@@ -339,18 +348,6 @@ impl StorageConfig {
             }
         }
 
-        // Validate memory limit
-        if let Some(limit) = self.memory_limit {
-            if limit < 1024 * 1024 {
-                // 1MB minimum
-                return Err(RustyPotatoError::ConfigError {
-                    message: "Memory limit must be at least 1MB".to_string(),
-                    config_key: Some("server.memory_limit".to_string()),
-                    source: None,
-                });
-            }
-        }
-
         Ok(())
     }
 }
@@ -458,7 +455,6 @@ mod tests {
             config.storage.aof_fsync_policy,
             FsyncPolicy::EverySecond
         ));
-        assert!(config.storage.memory_limit.is_none());
 
         assert!(config.network.tcp_nodelay);
         assert!(config.network.tcp_keepalive);
@@ -500,19 +496,6 @@ mod tests {
         // Test valid config
         config = Config::default();
         config.server.worker_threads = Some(4);
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_storage_config_validation() {
-        // Test invalid memory limit
-        let mut config = Config::default();
-        config.storage.memory_limit = Some(1024); // Less than 1MB
-        assert!(config.validate().is_err());
-
-        // Test valid memory limit
-        config = Config::default();
-        config.storage.memory_limit = Some(1024 * 1024 * 10); // 10MB
         assert!(config.validate().is_ok());
     }
 
@@ -574,7 +557,6 @@ worker_threads = 8
 aof_enabled = false
 aof_path = "test.aof"
 aof_fsync_policy = "Always"
-memory_limit = 1073741824
 
 [network]
 tcp_nodelay = false
@@ -606,7 +588,6 @@ file_path = "{}"
             config.storage.aof_fsync_policy,
             FsyncPolicy::Always
         ));
-        assert_eq!(config.storage.memory_limit, Some(1073741824));
 
         assert!(!config.network.tcp_nodelay);
         assert!(!config.network.tcp_keepalive);
