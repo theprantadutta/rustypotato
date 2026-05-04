@@ -7,7 +7,6 @@
 // Core modules
 pub mod config;
 pub mod error;
-pub mod logging;
 
 // Feature modules
 pub mod cli;

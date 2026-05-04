@@ -4,100 +4,16 @@
 //! health checks, and log rotation functionality.
 
 use rustypotato::{
-    config::{Config, LogFormat},
-    logging::{check_logging_health, LoggingSystem},
     metrics::{ConnectionEvent, MetricsCollector, StorageOperation, Timer},
     monitoring::{
         HealthChecker, LogRotationConfig, LogRotationManager, MonitoringServer, RotationPolicy,
     },
     storage::MemoryStore,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
-use tracing::{error, info, warn};
-
-#[tokio::test]
-async fn test_logging_system_initialization() {
-    let temp_dir = TempDir::new().unwrap();
-    let log_path = temp_dir.path().join("test.log");
-
-    let mut config = Config::default();
-    config.logging.level = "debug".to_string();
-    config.logging.format = LogFormat::Json;
-    config.logging.file_path = Some(log_path.clone());
-
-    let mut logging_system = LoggingSystem::new(config.clone());
-
-    // Initialize logging system (may fail if already initialized in other tests)
-    let result = logging_system.initialize().await;
-    // Don't assert on initialization result as it may fail if global subscriber is already set
-    if result.is_err() {
-        println!("Logging system already initialized: {result:?}");
-    }
-
-    // Test that we can write log messages
-    info!("Test info message");
-    warn!("Test warning message");
-    error!("Test error message");
-
-    // Flush logs
-    logging_system.flush().await.unwrap();
-
-    // Give some time for async logging to complete
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Check that log file was created
-    assert!(log_path.exists(), "Log file was not created");
-
-    // Check if log file has content (may be empty if subscriber wasn't initialized)
-    let log_content = tokio::fs::read_to_string(&log_path).await.unwrap();
-    if log_content.is_empty() {
-        println!("Log file is empty - this may be expected if tracing subscriber was already initialized");
-        return; // Skip the rest of the test
-    }
-
-    // For JSON format, each line should be valid JSON
-    for line in log_content.lines() {
-        if !line.trim().is_empty() {
-            let _: serde_json::Value = serde_json::from_str(line)
-                .unwrap_or_else(|_| panic!("Invalid JSON log line: {line}"));
-        }
-    }
-
-    // Test graceful shutdown
-    logging_system.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn test_logging_health_check() {
-    // Test console logging health
-    let config = Config::default();
-    let health = check_logging_health(&config).await.unwrap();
-    assert!(health, "Console logging should be healthy");
-
-    // Test file logging health with valid path
-    let temp_dir = TempDir::new().unwrap();
-    let log_path = temp_dir.path().join("health_test.log");
-
-    let mut config = Config::default();
-    config.logging.file_path = Some(log_path);
-
-    let health = check_logging_health(&config).await.unwrap();
-    assert!(health, "File logging with valid path should be healthy");
-
-    // Test file logging health with invalid path
-    let mut config = Config::default();
-    config.logging.file_path = Some(PathBuf::from("/invalid/path/test.log"));
-
-    let health = check_logging_health(&config).await.unwrap();
-    assert!(
-        !health,
-        "File logging with invalid path should be unhealthy"
-    );
-}
 
 #[tokio::test]
 async fn test_metrics_collector_comprehensive() {
@@ -465,33 +381,6 @@ async fn test_histogram_accuracy() {
         diff < Duration::from_micros(100),
         "Average calculation inaccurate: got {avg:?}, expected {expected_avg:?}"
     );
-}
-
-#[tokio::test]
-async fn test_error_handling_in_logging() {
-    // Test logging system with invalid configuration
-    let mut config = Config::default();
-    config.logging.level = "invalid_level".to_string();
-
-    let mut logging_system = LoggingSystem::new(config);
-    let result = logging_system.initialize().await;
-
-    // Should fail with invalid log level
-    assert!(result.is_err());
-
-    // Test with invalid file path
-    let mut config = Config::default();
-    config.logging.file_path = Some(PathBuf::from("/root/cannot_write_here.log"));
-
-    let mut logging_system = LoggingSystem::new(config);
-    let result = logging_system.initialize().await;
-
-    // May fail depending on permissions, but should handle gracefully
-    if let Err(err) = result {
-        // Error should be properly formatted
-        let error_msg = format!("{err}");
-        assert!(!error_msg.is_empty());
-    }
 }
 
 #[tokio::test]
