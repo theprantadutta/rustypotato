@@ -274,6 +274,10 @@ impl RustyPotatoError {
             RustyPotatoError::ResourceExhaustion { message, .. } => {
                 format!("ERR resource exhausted: {message}")
             }
+            RustyPotatoError::StorageError { message, .. } => {
+                // Pass through the message directly for WRONGTYPE errors
+                message.clone()
+            }
             _ => "ERR internal server error".to_string(),
         }
     }
