@@ -1147,21 +1147,6 @@ impl MemoryStore {
         }
     }
 
-    /// Get memory usage statistics
-    pub fn memory_stats(&self) -> MemoryStats {
-        let key_count = self.data.len();
-        let expiration_count = self.expiration_index.len();
-
-        // Rough estimation of memory usage
-        let estimated_memory = key_count * 100; // Rough estimate per key-value pair
-
-        MemoryStats {
-            key_count,
-            expiration_count,
-            estimated_memory_bytes: estimated_memory,
-        }
-    }
-
     /// Internal method to delete a key without expiration checking
     fn delete_internal(&self, key: &str) -> bool {
         // Remove from expiration index
@@ -1198,14 +1183,6 @@ impl MemoryStore {
 
         removed_count
     }
-}
-
-/// Memory usage statistics
-#[derive(Debug, Clone)]
-pub struct MemoryStats {
-    pub key_count: usize,
-    pub expiration_count: usize,
-    pub estimated_memory_bytes: usize,
 }
 
 impl Default for MemoryStore {
@@ -1881,25 +1858,6 @@ mod tests {
         assert!(store.keys().is_empty());
     }
 
-    #[tokio::test]
-    async fn test_memory_store_memory_stats() {
-        let store = MemoryStore::new();
-
-        // Initial stats
-        let stats = store.memory_stats();
-        assert_eq!(stats.key_count, 0);
-        assert_eq!(stats.expiration_count, 0);
-
-        // Add some data
-        store.set("key1", "value1").await.unwrap();
-        store.set_with_ttl("key2", "value2", 60).await.unwrap();
-
-        let stats = store.memory_stats();
-        assert_eq!(stats.key_count, 2);
-        assert_eq!(stats.expiration_count, 1);
-        assert!(stats.estimated_memory_bytes > 0);
-    }
-
     // Concurrent access tests
     #[tokio::test]
     async fn test_concurrent_set_get() {
@@ -2091,10 +2049,6 @@ mod tests {
 
         // Store should be in a consistent state
         assert!(store.len() <= 10); // At most 10 keys
-
-        // All operations should complete without panics
-        let stats = store.memory_stats();
-        assert!(stats.key_count <= 10);
     }
 
     #[tokio::test]
