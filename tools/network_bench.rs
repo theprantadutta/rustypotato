@@ -1,9 +1,9 @@
 //! Network-end-to-end benchmark — the honest one.
 //!
-//! `tools/quick_bench.rs` measures `MemoryStore` directly (no TCP, no
-//! RESP, in-process). Those numbers reflect the storage layer ceiling
-//! but are useless as a real "what does this server do for clients"
-//! claim.
+//! `tools/storage_microbench.rs` measures `MemoryStore` directly (no
+//! TCP, no RESP, in-process). Those numbers reflect the storage layer
+//! ceiling but are useless as a real "what does this server do for
+//! clients" claim.
 //!
 //! This tool connects via real TCP, encodes commands as RESP, sends
 //! pipelined batches across multiple concurrent connections, and reads
@@ -103,7 +103,7 @@ async fn main() {
     println!("with backpressure, the connection-pool semaphore, and the");
     println!("dispatch path. They are directly comparable to redis-benchmark");
     println!("output. For raw storage-layer ceiling (no network, no RESP),");
-    println!("see `cargo run --release --bin quick_bench`.");
+    println!("see `cargo run --release --bin storage_microbench`.");
     println!();
 }
 

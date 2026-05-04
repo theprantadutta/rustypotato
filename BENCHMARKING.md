@@ -9,7 +9,7 @@ This document explains how to measure RustyPotato's performance and what results
 cargo bench --bench performance_benchmarks
 
 # Run quick performance check (human-readable summary)
-cargo run --release --bin quick_bench
+cargo run --release --bin storage_microbench
 
 # View HTML reports (after running cargo bench)
 # Open: target/criterion/report/index.html
@@ -90,7 +90,7 @@ cargo bench --bench performance_benchmarks -- memory_patterns
 For a simple, human-readable performance report:
 
 ```bash
-cargo run --release --bin quick_bench
+cargo run --release --bin storage_microbench
 ```
 
 This outputs:

@@ -1,7 +1,21 @@
-//! Quick Benchmark Tool
+//! Storage-layer microbenchmark.
 //!
-//! A simple, human-readable performance benchmark for RustyPotato.
-//! Run with: cargo run --release --bin quick_bench
+//! **NOT a network benchmark.** This binary calls `MemoryStore`
+//! methods directly in-process — no TCP socket, no RESP codec, no
+//! command dispatch, no AOF logging. The numbers it produces only
+//! tell you about the raw `DashMap`/HashMap path, NOT what real
+//! Redis-compatible clients will observe over the wire. For that,
+//! use `cargo run --release --bin network_bench` (Stage 12), which
+//! goes through the full TCP+RESP path with multiple concurrent
+//! clients.
+//!
+//! Use this binary when you want to:
+//! - Profile an internal storage change in isolation (e.g. comparing
+//!   `DashMap` shard sizes, or a new value-type representation).
+//! - Sanity-check that the storage layer hasn't regressed by orders
+//!   of magnitude after a refactor.
+//!
+//! Run with: `cargo run --release --bin storage_microbench`
 
 use rustypotato::MemoryStore;
 use std::sync::Arc;
@@ -13,8 +27,12 @@ const WARMUP_ITERATIONS: usize = 10_000;
 fn main() {
     println!();
     println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║           RustyPotato Performance Report                     ║");
+    println!("║   RustyPotato Storage Microbenchmark (IN-PROCESS, NO NET)    ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("⚠️  These numbers reflect raw `MemoryStore` calls only —");
+    println!("    NO TCP, NO RESP, NO dispatch overhead. Do NOT compare");
+    println!("    against `redis-benchmark`. Use `network_bench` for that.");
     println!();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -63,7 +81,7 @@ fn main() {
         println!();
         println!("═══════════════════════════════════════════════════════════════");
         println!();
-        println!("THROUGHPUT:");
+        println!("STORAGE-LAYER THROUGHPUT (in-process, single thread):");
         println!(
             "  SET operations:    {:>12} ops/sec",
             format_number(set_stats.ops_per_sec)
@@ -99,8 +117,12 @@ fn main() {
         println!();
         println!("═══════════════════════════════════════════════════════════════");
         println!();
-        println!("For detailed benchmarks, run: cargo bench --bench performance_benchmarks");
-        println!("For HTML reports, open: target/criterion/report/index.html");
+        println!("For network-traffic numbers (50 clients, pipelined RESP):");
+        println!("    cargo run --release --bin network_bench");
+        println!();
+        println!("For statistical detail (criterion, HTML reports):");
+        println!("    cargo bench --bench performance_benchmarks");
+        println!("    open target/criterion/report/index.html");
         println!();
     });
 }

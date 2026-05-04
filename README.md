@@ -701,7 +701,8 @@ rustypotato/
 ├── tests/                   # Integration tests
 ├── benches/                 # Performance benchmarks (Criterion)
 ├── tools/                   # Utility binaries
-│   └── quick_bench.rs       # Human-readable benchmark tool
+│   ├── storage_microbench.rs  # In-process storage benchmark
+│   └── network_bench.rs       # Network-traffic benchmark (TCP+RESP)
 ├── docs/                    # Documentation
 ├── docker/                  # Docker configurations
 ├── .kiro/                   # Kiro specifications
@@ -789,14 +790,14 @@ should quote when comparing to other key-value stores.**
 
 ### Storage microbench (in-process ceiling)
 
-`tools/quick_bench.rs` measures `MemoryStore` directly — no TCP, no
-RESP, no connection pool, no command dispatch. It reflects the
-storage-layer ceiling and is useful for catching regressions in the
-hot read path, but it is **not** a "what does this server do for
-clients" claim.
+`tools/storage_microbench.rs` measures `MemoryStore` directly — no
+TCP, no RESP, no connection pool, no command dispatch. It reflects
+the storage-layer ceiling and is useful for catching regressions in
+the hot read path, but it is **not** a "what does this server do
+for clients" claim.
 
 ```bash
-cargo run --release --bin quick_bench
+cargo run --release --bin storage_microbench
 ```
 
 Earlier versions of this README quoted in-process microbench numbers
@@ -872,8 +873,11 @@ docker stats rustypotato
 Use the included benchmark tools:
 
 ```bash
-# Quick performance report (human-readable)
-cargo run --release --bin quick_bench
+# In-process storage microbenchmark (ceiling, not realistic)
+cargo run --release --bin storage_microbench
+
+# Realistic network-traffic benchmark (50 clients, RESP over TCP)
+cargo run --release --bin network_bench
 
 # Detailed Criterion benchmarks with statistical analysis
 cargo bench --bench performance_benchmarks

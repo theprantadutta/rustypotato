@@ -60,8 +60,8 @@ name = "rustypotato-cli"
 path = "src/bin/cli.rs"
 
 [[bin]]
-name = "quick_bench"
-path = "tools/quick_bench.rs"
+name = "storage_microbench"
+path = "tools/storage_microbench.rs"
 
 [[bin]]
 name = "network_bench"
