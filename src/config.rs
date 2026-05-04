@@ -46,12 +46,18 @@ pub struct StorageConfig {
     pub aof_fsync_policy: FsyncPolicy,
 }
 
-/// Network configuration
+/// Network configuration.
+///
+/// The `connection_timeout` field used to live here, was validated,
+/// and was printed in the startup banner — but the TCP server never
+/// consulted it. Connection lifetime is governed by `read_timeout`,
+/// `write_timeout`, and the per-shard `idle_timeout` (added in
+/// Stage 3 DoS hardening). Removing `connection_timeout` keeps the
+/// config surface honest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkConfig {
     pub tcp_nodelay: bool,
     pub tcp_keepalive: bool,
-    pub connection_timeout: u64,
     pub read_timeout: u64,
     pub write_timeout: u64,
     /// Maximum size in bytes of a single RESP bulk string. Matches Redis'
@@ -138,7 +144,6 @@ impl Default for NetworkConfig {
         Self {
             tcp_nodelay: true,
             tcp_keepalive: true,
-            connection_timeout: 30,
             read_timeout: 30,
             write_timeout: 30,
             max_bulk_size: default_max_bulk_size(),
@@ -354,14 +359,6 @@ impl StorageConfig {
 
 impl NetworkConfig {
     fn validate(&self) -> Result<()> {
-        if self.connection_timeout == 0 {
-            return Err(RustyPotatoError::ConfigError {
-                message: "Connection timeout must be greater than 0".to_string(),
-                config_key: Some("network.connection_timeout".to_string()),
-                source: None,
-            });
-        }
-
         if self.read_timeout == 0 {
             return Err(RustyPotatoError::ConfigError {
                 message: "Read timeout must be greater than 0".to_string(),
@@ -376,14 +373,6 @@ impl NetworkConfig {
                 config_key: Some("network.write_timeout".to_string()),
                 source: None,
             });
-        }
-
-        // Warn about very high timeout values
-        if self.connection_timeout > 3600 {
-            warn!(
-                "Connection timeout is very high ({} seconds)",
-                self.connection_timeout
-            );
         }
 
         Ok(())
@@ -458,7 +447,7 @@ mod tests {
 
         assert!(config.network.tcp_nodelay);
         assert!(config.network.tcp_keepalive);
-        assert_eq!(config.network.connection_timeout, 30);
+        assert_eq!(config.network.read_timeout, 30);
 
         assert_eq!(config.logging.level, "info");
         assert!(matches!(config.logging.format, LogFormat::Pretty));
@@ -501,13 +490,8 @@ mod tests {
 
     #[test]
     fn test_network_config_validation() {
-        // Test zero connection timeout
-        let mut config = Config::default();
-        config.network.connection_timeout = 0;
-        assert!(config.validate().is_err());
-
         // Test zero read timeout
-        config = Config::default();
+        let mut config = Config::default();
         config.network.read_timeout = 0;
         assert!(config.validate().is_err());
 
@@ -561,7 +545,6 @@ aof_fsync_policy = "Always"
 [network]
 tcp_nodelay = false
 tcp_keepalive = false
-connection_timeout = 60
 read_timeout = 45
 write_timeout = 45
 
@@ -591,7 +574,7 @@ file_path = "{}"
 
         assert!(!config.network.tcp_nodelay);
         assert!(!config.network.tcp_keepalive);
-        assert_eq!(config.network.connection_timeout, 60);
+        assert_eq!(config.network.read_timeout, 45);
 
         assert_eq!(config.logging.level, "error");
         assert!(matches!(config.logging.format, LogFormat::Json));

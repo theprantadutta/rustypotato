@@ -38,10 +38,8 @@ tcp_nodelay = true
 # Enable TCP keepalive (default: true)
 tcp_keepalive = true
 
-# Connection timeout in seconds (default: 30)
-connection_timeout = 30
-
-# Read timeout in seconds (default: 30)
+# Per-read timeout in seconds (default: 30) — caps how long a single
+# read on a connection can block before the server moves on.
 read_timeout = 30
 
 # Write timeout in seconds (default: 30)

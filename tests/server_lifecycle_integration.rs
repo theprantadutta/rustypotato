@@ -20,7 +20,6 @@ fn create_test_config() -> Config {
     config.server.port = 0; // Use random port for testing
     config.server.max_connections = 100;
     config.storage.aof_enabled = false; // Disable AOF for faster tests
-    config.network.connection_timeout = 5;
     config.network.read_timeout = 5;
     config.network.write_timeout = 5;
     config
@@ -471,7 +470,7 @@ async fn test_server_configuration_integration() {
     config.storage.aof_enabled = false; // Disable AOF for this test
     config.storage.aof_path = temp_dir.path().join("config_test.aof");
     config.network.tcp_nodelay = true;
-    config.network.connection_timeout = 10;
+    config.network.read_timeout = 10;
 
     let mut server = RustyPotatoServer::new(config.clone()).expect("Failed to create server");
     let addr = server
@@ -534,7 +533,6 @@ aof_enabled = false
 
 [network]
 tcp_nodelay = true
-connection_timeout = 30
 read_timeout = 30
 write_timeout = 30
 

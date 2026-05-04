@@ -13,7 +13,6 @@ pub fn create_test_config() -> Config {
     config.server.port = 0; // Use random port for testing
     config.server.max_connections = 1000;
     config.storage.aof_enabled = false; // Disable by default for faster tests
-    config.network.connection_timeout = 5;
     config.network.read_timeout = 5;
     config.network.write_timeout = 5;
     config

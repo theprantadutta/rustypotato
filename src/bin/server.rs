@@ -428,13 +428,10 @@ fn display_startup_info(config: &Config) {
     info!("  • TCP NoDelay: {}", config.network.tcp_nodelay);
     info!("  • TCP KeepAlive: {}", config.network.tcp_keepalive);
     info!(
-        "  • Connection Timeout: {}s",
-        config.network.connection_timeout
-    );
-    info!(
-        "  • Read/Write Timeout: {}s/{}",
+        "  • Read/Write Timeout: {}s/{}s",
         config.network.read_timeout, config.network.write_timeout
     );
+    info!("  • Idle Timeout: {}s", config.network.idle_timeout);
     info!("");
 }
 
