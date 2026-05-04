@@ -35,7 +35,6 @@ socket2 = { version = "0.5", features = ["all"] }
 # Additional core dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bincode = "1.3"
 uuid = { version = "1.0", features = ["v4"] }
 async-trait = "0.1"
 
@@ -69,7 +68,6 @@ name = "network_bench"
 path = "tools/network_bench.rs"
 
 [dev-dependencies]
-tokio-test = "0.4"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 proptest = "1.0"
 tempfile = "3.0"
