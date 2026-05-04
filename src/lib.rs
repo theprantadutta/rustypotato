@@ -27,7 +27,7 @@ pub mod test_utils;
 
 // Re-export commonly used types
 pub use commands::{CommandRegistry, CommandResult, ResponseValue};
-pub use metrics::{MetricsCollector, MetricsServer};
+pub use metrics::MetricsCollector;
 pub use monitoring::{HealthChecker, HealthStatus, LogRotationManager, MonitoringServer};
 pub use network::TcpServer;
 pub use storage::{replay_aof_file, MemoryStore, PersistenceManager, StoredValue, ValueType};

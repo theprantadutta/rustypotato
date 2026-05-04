@@ -1,16 +1,19 @@
-//! Metrics collection and monitoring for RustyPotato
+//! Metrics collection for RustyPotato.
 //!
-//! This module provides comprehensive metrics collection for monitoring
-//! performance, throughput, latency, and system health.
+//! Collection lives here; the HTTP serving surface is in
+//! `monitoring::MonitoringServer`, which already exposes both
+//! `GET /metrics` (Prometheus text format) and `GET /metrics/summary`
+//! (JSON). The standalone metrics-only HTTP server that used to live
+//! in `metrics/server.rs` was a duplicate that was never wired into
+//! the production binary; it was removed as part of the Stage 13
+//! cleanup.
 
 pub mod collector;
-pub mod server;
 
 pub use collector::{
     CommandMetrics, ConnectionEvent, MetricsCollector, MetricsSummary, NetworkMetrics,
     PerformanceMetrics, StorageMetrics, StorageOperation,
 };
-pub use server::MetricsServer;
 
 use std::time::{Duration, Instant};
 
