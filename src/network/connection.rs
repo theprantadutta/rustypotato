@@ -1,80 +1,22 @@
-//! Client connection management with connection pooling
+//! Client connection management with connection pooling.
 //!
-//! This module handles individual client connections and maintains a pool
-//! of active connections with configurable limits and statistics tracking.
-//! Includes optimized buffer reuse and connection pooling for performance.
+//! Tracks individual client connections and maintains a semaphore-bounded
+//! pool of active connections (Stage 3 DoS hardening). Per-connection
+//! buffers are owned by the per-connection read loop in `network::server`;
+//! a previous shared `BufferPool` was unused infrastructure and has been
+//! removed.
 
 use crate::error::{Result, RustyPotatoError};
-use bytes::BytesMut;
 use dashmap::DashMap;
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, RwLock, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{debug, warn};
 use uuid::Uuid;
-
-/// Buffer pool for reusing BytesMut instances to reduce allocations
-pub struct BufferPool {
-    buffers: Arc<Mutex<VecDeque<BytesMut>>>,
-    max_buffers: usize,
-    buffer_size: usize,
-}
-
-impl BufferPool {
-    /// Create a new buffer pool with specified capacity and buffer size
-    pub fn new(max_buffers: usize, buffer_size: usize) -> Self {
-        Self {
-            buffers: Arc::new(Mutex::new(VecDeque::with_capacity(max_buffers))),
-            max_buffers,
-            buffer_size,
-        }
-    }
-
-    /// Get a buffer from the pool or create a new one
-    pub async fn get_buffer(&self) -> BytesMut {
-        let mut buffers = self.buffers.lock().await;
-        if let Some(mut buffer) = buffers.pop_front() {
-            buffer.clear();
-            buffer
-        } else {
-            BytesMut::with_capacity(self.buffer_size)
-        }
-    }
-
-    /// Return a buffer to the pool for reuse
-    pub async fn return_buffer(&self, buffer: BytesMut) {
-        if buffer.capacity() >= self.buffer_size / 2 && buffer.capacity() <= self.buffer_size * 2 {
-            let mut buffers = self.buffers.lock().await;
-            if buffers.len() < self.max_buffers {
-                buffers.push_back(buffer);
-            }
-        }
-        // If buffer is too small/large or pool is full, just drop it
-    }
-
-    /// Get current pool statistics
-    pub async fn stats(&self) -> BufferPoolStats {
-        let buffers = self.buffers.lock().await;
-        BufferPoolStats {
-            available_buffers: buffers.len(),
-            max_buffers: self.max_buffers,
-            buffer_size: self.buffer_size,
-        }
-    }
-}
-
-/// Buffer pool statistics
-#[derive(Debug, Clone)]
-pub struct BufferPoolStats {
-    pub available_buffers: usize,
-    pub max_buffers: usize,
-    pub buffer_size: usize,
-}
 
 /// Client connection representation with metadata and stream
 #[derive(Debug)]
@@ -198,16 +140,11 @@ pub struct ConnectionPool {
     semaphore: Arc<Semaphore>,
     total_connections_accepted: AtomicU64,
     total_connections_rejected: AtomicU64,
-    buffer_pool: Arc<BufferPool>,
 }
 
 impl ConnectionPool {
     /// Create a new connection pool with the specified maximum connections
     pub fn new(max_connections: usize) -> Self {
-        // Create buffer pool with reasonable defaults
-        let buffer_pool_size = (max_connections / 10).clamp(10, 1000);
-        let buffer_pool = Arc::new(BufferPool::new(buffer_pool_size, 8192));
-
         Self {
             connections: DashMap::new(),
             permits: DashMap::new(),
@@ -215,23 +152,7 @@ impl ConnectionPool {
             semaphore: Arc::new(Semaphore::new(max_connections)),
             total_connections_accepted: AtomicU64::new(0),
             total_connections_rejected: AtomicU64::new(0),
-            buffer_pool,
         }
-    }
-
-    /// Get a buffer from the pool
-    pub async fn get_buffer(&self) -> BytesMut {
-        self.buffer_pool.get_buffer().await
-    }
-
-    /// Return a buffer to the pool
-    pub async fn return_buffer(&self, buffer: BytesMut) {
-        self.buffer_pool.return_buffer(buffer).await;
-    }
-
-    /// Get buffer pool statistics
-    pub async fn buffer_pool_stats(&self) -> BufferPoolStats {
-        self.buffer_pool.stats().await
     }
 
     /// Try to atomically reserve a slot for a new connection. Returns the
