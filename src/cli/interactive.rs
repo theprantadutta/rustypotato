@@ -1,29 +1,123 @@
-//! Interactive REPL mode for CLI
+//! Interactive REPL mode for the CLI client.
+//!
+//! Wraps `rustyline` for line editing, persistent history (up/down
+//! arrows), and tab-completion of registered command names. Because
+//! rustyline is synchronous and the CLI client runs on the tokio
+//! runtime, every blocking `readline` call lives on
+//! `tokio::task::spawn_blocking` so it doesn't stall the runtime.
 
 use crate::cli::client::CliClient;
 use crate::error::{Result, RustyPotatoError};
-use std::io::{self, Write};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use rustyline::completion::{Completer, Pair};
+use rustyline::error::ReadlineError;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::FileHistory;
+use rustyline::validate::Validator;
+use rustyline::{Context, Editor, Helper};
+use std::path::PathBuf;
 use tracing::{debug, error, warn};
 
-/// Interactive REPL for CLI client
+/// All commands the CLI knows about. Used for tab completion.
+/// Kept in sorted order for deterministic completion suggestions.
+const KNOWN_COMMANDS: &[&str] = &[
+    "BGREWRITEAOF",
+    "COMMAND",
+    "DBSIZE",
+    "DECR",
+    "DEL",
+    "ECHO",
+    "EXISTS",
+    "EXPIRE",
+    "EXPIREAT",
+    "FLUSHDB",
+    "GET",
+    "HDEL",
+    "HEXISTS",
+    "HGET",
+    "HGETALL",
+    "HKEYS",
+    "HLEN",
+    "HMGET",
+    "HSET",
+    "HVALS",
+    "INCR",
+    "INFO",
+    "KEYS",
+    "MGET",
+    "MSET",
+    "PEXPIRE",
+    "PEXPIREAT",
+    "PING",
+    "PTTL",
+    "QUIT",
+    "SET",
+    "TTL",
+    "TYPE",
+];
+
+/// Helper that wires rustyline up with command-name tab completion.
+struct ReplHelper;
+
+impl Completer for ReplHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> std::result::Result<(usize, Vec<Pair>), ReadlineError> {
+        // Only complete the FIRST whitespace-delimited token (the
+        // command name). Once the user has typed a space, key/field
+        // arguments aren't worth speculating on.
+        let prefix_end = line[..pos].find(char::is_whitespace).unwrap_or(pos);
+        if prefix_end != pos {
+            // Cursor is past the first token — no completions.
+            return Ok((pos, vec![]));
+        }
+        let prefix = &line[..pos];
+        let upper = prefix.to_ascii_uppercase();
+        let candidates = KNOWN_COMMANDS
+            .iter()
+            .filter(|cmd| cmd.starts_with(&upper))
+            .map(|cmd| Pair {
+                display: (*cmd).to_string(),
+                replacement: (*cmd).to_string(),
+            })
+            .collect();
+        Ok((0, candidates))
+    }
+}
+
+impl Hinter for ReplHelper {
+    type Hint = String;
+}
+
+impl Highlighter for ReplHelper {}
+impl Validator for ReplHelper {}
+impl Helper for ReplHelper {}
+
+/// Interactive REPL for CLI client.
 pub struct InteractiveMode {
     client: CliClient,
-    history: Vec<String>,
-    max_history: usize,
+    history_path: PathBuf,
 }
 
 impl InteractiveMode {
-    /// Create a new interactive mode instance
+    /// Create a new interactive mode instance. History is loaded
+    /// from / saved to `~/.rustypotato_history`.
     pub fn new(address: String) -> Self {
+        let history_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".rustypotato_history");
         Self {
             client: CliClient::with_address(address),
-            history: Vec::new(),
-            max_history: 1000,
+            history_path,
         }
     }
 
-    /// Start the interactive REPL
+    /// Start the interactive REPL.
     pub async fn start(&mut self) -> Result<()> {
         println!("RustyPotato CLI - Interactive Mode");
         println!("Type 'help' for available commands, 'quit' or 'exit' to leave");
@@ -38,73 +132,96 @@ impl InteractiveMode {
         println!("Connected to RustyPotato server");
         println!();
 
-        // Main REPL loop
-        let stdin = tokio::io::stdin();
-        let mut reader = BufReader::new(stdin);
-        let mut line = String::new();
+        // Spin up rustyline. Loading history is best-effort; a missing
+        // file on first run is normal.
+        let mut editor: Editor<ReplHelper, FileHistory> =
+            Editor::new().map_err(|e| RustyPotatoError::InternalError {
+                message: format!("Failed to initialise rustyline editor: {e}"),
+                component: Some("cli::interactive".to_string()),
+                source: None,
+            })?;
+        editor.set_helper(Some(ReplHelper));
+        let _ = editor.load_history(&self.history_path);
 
+        // Each iteration moves the editor across an `await` boundary
+        // via `spawn_blocking`; the editor returns at the end of the
+        // turn so it can be reused next iteration.
+        let mut editor = Some(editor);
         loop {
-            // Print prompt
-            print!("rustypotato> ");
-            io::stdout().flush().unwrap();
+            let mut ed = editor.take().unwrap();
+            let line_result =
+                tokio::task::spawn_blocking(move || (ed.readline("rustypotato> "), ed))
+                    .await
+                    .map_err(|e| RustyPotatoError::InternalError {
+                        message: format!("readline task panicked: {e}"),
+                        component: Some("cli::interactive".to_string()),
+                        source: None,
+                    })?;
+            let (read, ed) = line_result;
+            editor = Some(ed);
 
-            // Read line
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => {
-                    // EOF (Ctrl+D)
+            let line = match read {
+                Ok(l) => l,
+                Err(ReadlineError::Interrupted) => {
+                    // Ctrl+C — clear the line and re-prompt.
+                    continue;
+                }
+                Err(ReadlineError::Eof) => {
+                    // Ctrl+D — graceful exit.
                     println!();
                     break;
-                }
-                Ok(_) => {
-                    let input = line.trim();
-
-                    if input.is_empty() {
-                        continue;
-                    }
-
-                    // Handle special commands
-                    match input.to_lowercase().as_str() {
-                        "quit" | "exit" => {
-                            println!("Goodbye!");
-                            break;
-                        }
-                        "help" => {
-                            self.show_help();
-                            continue;
-                        }
-                        "history" => {
-                            self.show_history();
-                            continue;
-                        }
-                        "clear" => {
-                            // Clear screen (works on most terminals)
-                            print!("\x1B[2J\x1B[1;1H");
-                            io::stdout().flush().unwrap();
-                            continue;
-                        }
-                        _ => {}
-                    }
-
-                    // Add to history
-                    self.add_to_history(input.to_string());
-
-                    // Parse and execute command
-                    match self.parse_and_execute(input).await {
-                        Ok(response) => {
-                            let formatted = CliClient::format_response(&response);
-                            println!("{formatted}");
-                        }
-                        Err(e) => {
-                            eprintln!("Error: {e}");
-                        }
-                    }
                 }
                 Err(e) => {
                     error!("Failed to read input: {}", e);
                     eprintln!("Failed to read input: {e}");
                     break;
                 }
+            };
+
+            let input = line.trim();
+            if input.is_empty() {
+                continue;
+            }
+
+            // Best-effort history append; ignore failures so the user
+            // can still issue commands even if disk write fails.
+            let _ = editor.as_mut().unwrap().add_history_entry(input);
+
+            // Special meta-commands handled locally.
+            match input.to_lowercase().as_str() {
+                "quit" | "exit" => {
+                    println!("Goodbye!");
+                    break;
+                }
+                "help" => {
+                    self.show_help();
+                    continue;
+                }
+                "clear" => {
+                    print!("\x1B[2J\x1B[1;1H");
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                    continue;
+                }
+                _ => {}
+            }
+
+            match self.parse_and_execute(input).await {
+                Ok(response) => {
+                    let formatted = CliClient::format_response(&response);
+                    println!("{formatted}");
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                }
+            }
+        }
+
+        // Save history; warn but don't fail the session if disk write
+        // doesn't work.
+        if let Some(ed) = editor.as_mut() {
+            if let Err(e) = ed.save_history(&self.history_path) {
+                warn!("Failed to save history: {}", e);
             }
         }
 
@@ -116,7 +233,7 @@ impl InteractiveMode {
         Ok(())
     }
 
-    /// Parse command line and execute
+    /// Parse command line and execute.
     async fn parse_and_execute(&mut self, input: &str) -> Result<crate::commands::ResponseValue> {
         let parts: Vec<&str> = input.split_whitespace().collect();
 
@@ -135,65 +252,51 @@ impl InteractiveMode {
         self.client.execute_command(&command, &args).await
     }
 
-    /// Add command to history
-    fn add_to_history(&mut self, command: String) {
-        // Don't add duplicate consecutive commands
-        if let Some(last) = self.history.last() {
-            if last == &command {
-                return;
-            }
-        }
-
-        self.history.push(command);
-
-        // Limit history size
-        if self.history.len() > self.max_history {
-            self.history.remove(0);
-        }
-    }
-
-    /// Show command history
-    fn show_history(&self) {
-        if self.history.is_empty() {
-            println!("No command history");
-            return;
-        }
-
-        println!("Command History:");
-        for (i, cmd) in self.history.iter().enumerate() {
-            println!("{:3}: {}", i + 1, cmd);
-        }
-    }
-
-    /// Show help information
+    /// Show help information.
     fn show_help(&self) {
         println!("Available Commands:");
         println!();
         println!("String Operations:");
-        println!("  SET key value          - Set a key to a value");
+        println!("  SET key value [EX|PX|EXAT|PXAT n] [NX|XX] [KEEPTTL] [GET]");
         println!("  GET key                - Get the value of a key");
-        println!("  DEL key                - Delete a key");
-        println!("  EXISTS key             - Check if a key exists");
+        println!("  DEL key [key ...]      - Delete keys");
+        println!("  EXISTS key [key ...]   - Count existing keys");
+        println!("  MGET key [key ...]     - Get multiple values");
+        println!("  MSET key val [key val ...] - Set multiple key/value pairs");
         println!();
         println!("TTL Operations:");
-        println!("  EXPIRE key seconds     - Set expiration time for a key");
-        println!("  TTL key                - Get time to live for a key");
+        println!("  EXPIRE key seconds [NX|XX|GT|LT]");
+        println!("  PEXPIRE key milliseconds [NX|XX|GT|LT]");
+        println!("  EXPIREAT key unix-seconds [NX|XX|GT|LT]");
+        println!("  PEXPIREAT key unix-milliseconds [NX|XX|GT|LT]");
+        println!("  TTL key                - Get TTL in seconds");
+        println!("  PTTL key               - Get TTL in milliseconds");
         println!();
         println!("Atomic Operations:");
-        println!("  INCR key               - Increment the integer value of a key");
-        println!("  DECR key               - Decrement the integer value of a key");
+        println!("  INCR key               - Increment integer value");
+        println!("  DECR key               - Decrement integer value");
+        println!();
+        println!("Hash Operations:");
+        println!("  HSET key field value [field value ...]");
+        println!("  HGET key field");
+        println!("  HMGET key field [field ...]");
+        println!("  HDEL key field [field ...]");
+        println!("  HGETALL key | HKEYS key | HVALS key | HLEN key");
+        println!("  HEXISTS key field");
+        println!();
+        println!("Server / Admin:");
+        println!("  PING [message] | ECHO message");
+        println!("  DBSIZE | TYPE key | FLUSHDB | KEYS pattern");
+        println!("  INFO [section] | COMMAND [COUNT|DOCS|LIST]");
+        println!("  BGREWRITEAOF           - Compact the AOF");
         println!();
         println!("Interactive Commands:");
         println!("  help                   - Show this help message");
-        println!("  history                - Show command history");
         println!("  clear                  - Clear the screen");
         println!("  quit, exit             - Exit the interactive mode");
         println!();
-        println!("Examples:");
-        println!("  SET mykey \"hello world\"");
-        println!("  GET mykey");
-        println!("  EXPIRE mykey 60");
-        println!("  INCR counter");
+        println!("Tab-completion is available for command names.");
+        println!("Up/down arrows recall previous commands.");
         println!();
     }
 }
