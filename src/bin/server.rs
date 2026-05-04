@@ -12,13 +12,19 @@ use std::process;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
-use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
-/// Server shutdown coordinator for managing graceful shutdown
+/// Server shutdown coordinator for managing graceful shutdown.
+///
+/// Signal handling is fanned out via `tokio::select!` against a future
+/// returned from `setup_signal_handlers`. There used to be a
+/// `broadcast::Sender<()>` here that the signal handler `send`-d to
+/// at the end, but it had no subscribers — the actual fan-out was
+/// always the future completing. The broadcast was theatrical (its
+/// own log line read "Failed to send shutdown signal (no receivers)")
+/// and has been removed.
 struct ShutdownCoordinator {
-    shutdown_tx: broadcast::Sender<()>,
     server: Option<RustyPotatoServer>,
     monitoring_server: Option<MonitoringServer>,
     log_rotation: Option<Arc<LogRotationManager>>,
@@ -30,9 +36,7 @@ impl ShutdownCoordinator {
         monitoring_server: MonitoringServer,
         log_rotation: Arc<LogRotationManager>,
     ) -> Self {
-        let (shutdown_tx, _) = broadcast::channel(16);
         Self {
-            shutdown_tx,
             server: Some(server),
             monitoring_server: Some(monitoring_server),
             log_rotation: Some(log_rotation),
@@ -122,10 +126,13 @@ impl ShutdownCoordinator {
         }
     }
 
-    /// Set up comprehensive signal handling for graceful shutdown
+    /// Set up comprehensive signal handling for graceful shutdown.
+    ///
+    /// Returns a future that resolves once any of the OS shutdown
+    /// signals has been observed. The caller `select!`s this future
+    /// against the running server task; when it resolves, the
+    /// shutdown branch fires.
     async fn setup_signal_handlers(&self) -> impl std::future::Future<Output = ()> {
-        let shutdown_tx = self.shutdown_tx.clone();
-
         async move {
             #[cfg(unix)]
             {
@@ -161,11 +168,6 @@ impl ShutdownCoordinator {
                         error!("Failed to listen for Ctrl+C signal: {}", e);
                     }
                 }
-            }
-
-            // Notify all components about shutdown
-            if let Err(e) = shutdown_tx.send(()) {
-                debug!("Failed to send shutdown signal (no receivers): {}", e);
             }
         }
     }
