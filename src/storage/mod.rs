@@ -1,13 +1,17 @@
 //! Storage layer implementations
 //!
-//! This module provides the core storage functionality including
-//! in-memory storage, persistence, and expiration management.
+//! Provides the core storage primitives:
+//! - `MemoryStore` (DashMap-backed, lazy expiration on read).
+//! - `PersistenceManager` for the AOF.
+//!
+//! Expiration is handled inline by `MemoryStore` — every read path
+//! checks `is_expired()` and lazily evicts. Active sweep is exposed
+//! as `MemoryStore::cleanup_expired()` for callers that want to do
+//! periodic GC.
 
-pub mod expiration;
 pub mod memory;
 pub mod persistence;
 
-pub use expiration::{ExpirationEntry, ExpirationManager};
 pub use memory::{
     ExpireFlag, MemoryStore, SetExistence, SetOutcome, SetTtlOption, StoredValue, ValueType,
 };
