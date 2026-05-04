@@ -5,6 +5,7 @@
 //! graceful shutdown, and integration of all components (storage, network, persistence, config).
 
 use clap::{Arg, Command};
+use rustypotato::config::LogFormat;
 use rustypotato::monitoring::{LogRotationConfig, RotationPolicy};
 use rustypotato::{Config, HealthChecker, LogRotationManager, MonitoringServer, RustyPotatoServer};
 use std::path::PathBuf;
@@ -173,53 +174,63 @@ impl ShutdownCoordinator {
     }
 }
 
-/// Initialize logging with enhanced configuration
+/// Initialize logging with enhanced configuration.
+///
+/// Branches on `config.logging.format` so that `Json`/`Compact` settings
+/// from `rustypotato.toml` actually take effect — until Stage 13's
+/// audit landed they were parsed and validated but ignored, with the
+/// default `Pretty` formatter always selected. The writer is chosen by
+/// `file_path` (file or stderr) orthogonally to the formatter choice.
 fn init_logging(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.logging.level));
 
-    let subscriber = fmt()
-        .with_env_filter(env_filter)
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_file(true)
-        .with_line_number(true);
-
-    // Configure output based on logging configuration
-    match &config.logging.file_path {
-        Some(file_path) => {
-            let file = std::fs::OpenOptions::new()
+    // Open the log writer (file or stderr) once. The same writer is
+    // handed to whichever formatter we end up using.
+    let file_writer = match &config.logging.file_path {
+        Some(file_path) => Some(Arc::new(
+            std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(file_path)
-                .map_err(|e| format!("Failed to open log file {}: {}", file_path.display(), e))?;
+                .map_err(|e| format!("Failed to open log file {}: {}", file_path.display(), e))?,
+        )),
+        None => None,
+    };
 
-            // Try to set the subscriber, but don't fail if one is already set
-            match subscriber.with_writer(Arc::new(file)).try_init() {
-                Ok(()) => {
-                    info!(
-                        "Logging initialized with file output: {}",
-                        file_path.display()
-                    );
-                }
+    // Macro: build a `fmt()` subscriber, apply common options, install
+    // the chosen writer, and try-init. Each format variant produces a
+    // distinct concrete type so the body is duplicated three ways
+    // rather than abstracted behind a trait.
+    macro_rules! init_with {
+        ($fmt_chain:expr) => {{
+            let subscriber = $fmt_chain
+                .with_env_filter(env_filter)
+                .with_target(false)
+                .with_thread_ids(true)
+                .with_file(true)
+                .with_line_number(true);
+
+            let init_result = match &file_writer {
+                Some(file) => subscriber.with_writer(Arc::clone(file)).try_init(),
+                None => subscriber.try_init(),
+            };
+            match init_result {
+                Ok(()) => match &config.logging.file_path {
+                    Some(p) => info!("Logging initialized with file output: {}", p.display()),
+                    None => info!("Logging initialized with console output"),
+                },
                 Err(_) => {
-                    // Subscriber already set, just log a debug message
-                    debug!("Logging subscriber already initialized, skipping file configuration");
+                    debug!("Logging subscriber already initialized; honoring existing config");
                 }
             }
-        }
-        None => {
-            // Try to set the subscriber, but don't fail if one is already set
-            match subscriber.try_init() {
-                Ok(()) => {
-                    info!("Logging initialized with console output");
-                }
-                Err(_) => {
-                    // Subscriber already set, just log a debug message
-                    debug!("Logging subscriber already initialized, using existing configuration");
-                }
-            }
-        }
+        }};
+    }
+
+    match config.logging.format {
+        LogFormat::Json => init_with!(fmt().json()),
+        LogFormat::Compact => init_with!(fmt().compact()),
+        LogFormat::Pretty => init_with!(fmt().pretty()),
     }
 
     Ok(())
