@@ -17,6 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::Ping) => {
+            execute_single_command(&cli.address, "PING", &[]).await?;
+        }
         Some(Commands::Set { key, value }) => {
             execute_single_command(&cli.address, "SET", &[key, value]).await?;
         }

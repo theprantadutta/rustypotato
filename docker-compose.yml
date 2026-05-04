@@ -5,20 +5,20 @@ services:
     image: rustypotato/rustypotato:latest
     container_name: rustypotato
     ports:
+      # Main RESP port. Match the `port` value in
+      # docker/rustypotato.toml (default: 6379).
       - "6379:6379"
-      - "9090:9090"  # Metrics port
+      # Monitoring/health/metrics endpoint. The bin currently binds
+      # this at `port + 1000` (so 7379 for the default port). If
+      # you change the main port, change this too.
+      - "7379:7379"
     volumes:
       - rustypotato-data:/data
       - ./docker/rustypotato.toml:/etc/rustypotato/rustypotato.toml:ro
-    environment:
-      - RUSTYPOTATO_LOG_LEVEL=info
-      - RUSTYPOTATO_METRICS_ENABLED=true
     command: >
       rustypotato-server
       --config /etc/rustypotato/rustypotato.toml
       --bind 0.0.0.0
-      --aof-path /data/rustypotato.aof
-      --metrics-port 9090
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "rustypotato-cli", "ping"]

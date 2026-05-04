@@ -552,11 +552,17 @@ async fn async_main(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         std::sync::Arc::clone(&metrics),
     ));
 
+    // Bind the monitoring server to the same address as the main
+    // RESP listener. Hardcoding 127.0.0.1 here meant containerised
+    // deployments couldn't expose the /health and /metrics endpoints
+    // — Docker port-mappings only forward to interfaces the process
+    // bound. Following the user's `bind_address` setting fixes that
+    // and keeps localhost-only deployments unchanged.
     let monitoring_server = MonitoringServer::new(
         health_checker,
         std::sync::Arc::clone(&metrics),
         Arc::clone(&log_rotation),
-        "127.0.0.1".to_string(),
+        config.server.bind_address.clone(),
         config.server.port + 1000, // Monitoring on port + 1000
     );
 

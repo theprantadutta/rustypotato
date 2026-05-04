@@ -20,6 +20,10 @@ pub struct Cli {
 /// Available CLI commands
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Send PING — returns PONG on success. Used by Docker
+    /// `HEALTHCHECK` and similar liveness probes to verify the
+    /// server is reachable.
+    Ping,
     /// Set a key-value pair
     Set { key: String, value: String },
     /// Get a value by key

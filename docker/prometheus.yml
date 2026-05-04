@@ -9,7 +9,9 @@ rule_files:
 scrape_configs:
   - job_name: 'rustypotato'
     static_configs:
-      - targets: ['rustypotato:9090']
+      # Port = main port + 1000 (the bin's MonitoringServer convention).
+      # If you change the main port in rustypotato.toml, change this too.
+      - targets: ['rustypotato:7379']
     scrape_interval: 5s
     metrics_path: /metrics
     

@@ -65,11 +65,23 @@ impl RespCodec {
         self.buffer.len()
     }
 
-    /// Encode a ResponseValue into RESP format
+    /// Encode a `ResponseValue` into RESP format.
+    ///
+    /// The codec's internal buffer is treated as scratch space: it is
+    /// cleared on entry, written into, the result is returned as a
+    /// fresh `Vec<u8>`, and the buffer is cleared again on exit so the
+    /// codec is left empty. The exit clear is load-bearing — the CLI
+    /// client uses one codec for both encode and decode and would
+    /// otherwise feed its own outgoing request bytes back into
+    /// `decode_resp_value` when reading the response (the "drain
+    /// pipelined frames" fast path consumes whatever's already in the
+    /// buffer).
     pub fn encode(&mut self, value: &ResponseValue) -> Result<Vec<u8>> {
         self.buffer.clear();
         self.encode_value(value)?;
-        Ok(self.buffer.to_vec())
+        let out = self.buffer.to_vec();
+        self.buffer.clear();
+        Ok(out)
     }
 
     /// Decode RESP data into a ParsedCommand

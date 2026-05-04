@@ -17,6 +17,11 @@ Thumbs.db
 # Logs
 *.log
 
+# Server runtime artifacts (AOF is written next to the binary by
+# default; tests and ad-hoc runs create one in the repo root).
+*.aof
+*.aof.rewrite.*.tmp
+
 # Local configuration
 rustypotato.local.toml
 

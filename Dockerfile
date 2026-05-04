@@ -13,12 +13,18 @@ WORKDIR /app
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy source code and benchmarks (needed for Cargo.toml validation)
+# Copy source. `benches/` and `tools/` are required because Cargo.toml
+# declares [[bench]] and [[bin]] entries pointing into them — without
+# the source files cargo refuses to load the manifest.
 COPY src ./src
 COPY benches ./benches
+COPY tools ./tools
 
-# Build for release (exclude benchmarks and tests for Docker)
-RUN cargo build --release --bins
+# Build only the production server + CLI. The `tools/*_bench` bins
+# don't ship in the runtime image — explicit `--bin` flags skip them.
+RUN cargo build --release \
+    --bin rustypotato-server \
+    --bin rustypotato-cli
 
 # Runtime stage
 FROM debian:bookworm-slim
