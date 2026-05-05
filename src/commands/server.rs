@@ -334,8 +334,14 @@ fn glob_match_bytes(p: &[u8], t: &[u8]) -> bool {
     while ti < t.len() {
         if pi < p.len() {
             match p[pi] {
-                b'\\' if pi + 1 < p.len() => {
-                    if p[pi + 1] == t[ti] {
+                b'\\' => {
+                    // Backslash escapes the next pattern byte. Match when
+                    // there IS a next byte AND it equals the current text
+                    // byte; otherwise fall through to the backtrack branch
+                    // below — never let `c if c == t[ti]` capture a stray
+                    // backslash, that would treat `\x` as a literal `\`
+                    // followed by `x` instead of an escaped `x`.
+                    if pi + 1 < p.len() && p[pi + 1] == t[ti] {
                         pi += 2;
                         ti += 1;
                         continue;
