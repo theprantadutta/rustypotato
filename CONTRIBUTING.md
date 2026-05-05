@@ -73,7 +73,7 @@ cargo install cargo-watch cargo-tarpaulin cargo-audit cargo-deny
 
 ### 2. Branch Strategy
 
-- Create feature branches from `main`
+- Create feature branches from `master`
 - Use descriptive branch names: `feature/add-hash-commands`, `fix/memory-leak`
 - Keep branches focused and short-lived
 

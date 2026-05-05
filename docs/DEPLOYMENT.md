@@ -1,292 +1,154 @@
-# RustyPotato Deployment Guide
+# Deployment
 
-This guide covers various deployment options for RustyPotato, from development to production environments.
+This guide covers running RustyPotato in real environments. It is
+deliberately conservative: it documents what works in v0.2.0, not
+what's planned. For configuration knobs, see
+[CONFIGURATION.md](CONFIGURATION.md).
 
-## Table of Contents
+## Contents
 
-- [Quick Start](#quick-start)
-- [Docker Deployment](#docker-deployment)
-- [Kubernetes Deployment](#kubernetes-deployment)
-- [Bare Metal Installation](#bare-metal-installation)
-- [Cloud Deployments](#cloud-deployments)
-- [Configuration](#configuration)
-- [Monitoring and Observability](#monitoring-and-observability)
-- [Security](#security)
-- [Performance Tuning](#performance-tuning)
-- [Backup and Recovery](#backup-and-recovery)
+- [Quick start](#quick-start)
+- [Docker](#docker)
+- [Kubernetes](#kubernetes)
+- [Bare metal / systemd](#bare-metal--systemd)
+- [Persistence](#persistence)
+- [Monitoring](#monitoring)
+- [Backup and recovery](#backup-and-recovery)
+- [Network security](#network-security)
 - [Troubleshooting](#troubleshooting)
 
-## Quick Start
+---
 
-### Docker (Recommended for Development)
+## Quick start
 
-```bash
-# Run RustyPotato with default settings
-docker run -d -p 6379:6379 --name rustypotato theprantadutta/rustypotato:latest
-
-# Test the connection
-docker run --rm --link rustypotato theprantadutta/rustypotato:latest rustypotato-cli ping
-```
-
-### Pre-built Binaries
+Pre-built binaries from [GitHub
+Releases](https://github.com/theprantadutta/rustypotato/releases):
 
 ```bash
-# Download and extract
+# Linux x64
 curl -L https://github.com/theprantadutta/rustypotato/releases/latest/download/rustypotato-linux-x64.tar.gz | tar xz
-
-# Run server
-./rustypotato-server
-
-# Test with CLI
-./rustypotato-cli ping
+cd rustypotato-linux-x64
+./rustypotato-server &
+./rustypotato-cli ping       # PONG
 ```
 
-## Docker Deployment
+Available archives:
 
-### Basic Docker Setup
+| Platform | Archive |
+|---|---|
+| Linux x86_64 | `rustypotato-linux-x64.tar.gz` |
+| Linux aarch64 | `rustypotato-linux-arm64.tar.gz` |
+| macOS x86_64 | `rustypotato-macos-x64.tar.gz` |
+| macOS aarch64 | `rustypotato-macos-arm64.tar.gz` |
+| Windows x86_64 | `rustypotato-windows-x64.zip` |
 
-#### Single Container
+Each archive ships with a `.sha256` companion file for verification.
+
+---
+
+## Docker
+
+### Single container
 
 ```bash
-# Create data volume
-docker volume create rustypotato-data
-
-# Run with persistent storage
 docker run -d \
   --name rustypotato \
   -p 6379:6379 \
-  -p 9090:9090 \
+  -p 7379:7379 \
   -v rustypotato-data:/data \
-  -e RUSTYPOTATO_LOG_LEVEL=info \
-  theprantadutta/rustypotato:latest \
-  --aof-path /data/rustypotato.aof \
-  --metrics-port 9090
+  rustypotato/rustypotato:latest \
+  rustypotato-server --bind 0.0.0.0
 ```
 
-#### Docker Compose
+Two ports because RustyPotato exposes a separate monitoring HTTP server
+at `port + 1000`. With the default RESP port at 6379, monitoring lives
+at 7379. See [Monitoring](#monitoring).
 
-Create `docker-compose.yml`:
+### Docker Compose
 
-```yaml
-version: '3.8'
-
-services:
-  rustypotato:
-    image: theprantadutta/rustypotato:latest
-    container_name: rustypotato
-    ports:
-      - "6379:6379"
-      - "9090:9090"
-    volumes:
-      - rustypotato-data:/data
-      - ./config/rustypotato.toml:/etc/rustypotato/rustypotato.toml:ro
-    environment:
-      - RUSTYPOTATO_LOG_LEVEL=info
-      - RUSTYPOTATO_METRICS_ENABLED=true
-    command: >
-      --config /etc/rustypotato/rustypotato.toml
-      --aof-path /data/rustypotato.aof
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "rustypotato-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  # Optional: Prometheus for metrics collection
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9091:9090"
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-    depends_on:
-      - rustypotato
-
-  # Optional: Grafana for visualization
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    depends_on:
-      - prometheus
-
-volumes:
-  rustypotato-data:
-  prometheus-data:
-  grafana-data:
-```
-
-Run with:
+The repository ships a working `docker-compose.yml` with the server,
+Prometheus, and Grafana wired together. From a checkout:
 
 ```bash
 docker-compose up -d
 ```
 
-### Production Docker Setup
+Services:
 
-#### Multi-stage Build for Custom Images
+- `rustypotato` — the server, exposing 6379 (RESP) and 7379 (HTTP monitoring)
+- `prometheus` — scrapes `/metrics` every interval defined in
+  `docker/prometheus.yml`, exposed on host port 9091
+- `grafana` — pre-provisioned with the rustypotato dashboard, exposed on
+  host port 3000 (login `admin` / `admin`)
 
-```dockerfile
-# Dockerfile.production
-FROM theprantadutta/rustypotato:latest
+The included `docker/rustypotato.toml` is a minimal config tuned for
+container deployment. Override it by mounting your own at the same path
+or pointing `--config` somewhere else.
 
-# Add custom configuration
-COPY production.toml /etc/rustypotato/rustypotato.toml
+### Persistence
 
-# Add monitoring scripts
-COPY scripts/health-check.sh /usr/local/bin/
-COPY scripts/backup.sh /usr/local/bin/
+Mount a volume at `/data` and point the AOF at it via the config file:
 
-# Set production defaults
-ENV RUSTYPOTATO_LOG_LEVEL=warn
-ENV RUSTYPOTATO_METRICS_ENABLED=true
-
-# Use custom entrypoint
-COPY scripts/entrypoint.sh /entrypoint.sh
-ENTRYPOINT ["/entrypoint.sh"]
+```toml
+# docker/rustypotato.toml
+[storage]
+aof_enabled = true
+aof_path = "/data/rustypotato.aof"
+aof_fsync_policy = "EverySecond"
 ```
 
-#### Docker Swarm Deployment
+Compose example:
 
 ```yaml
-# docker-stack.yml
-version: '3.8'
-
 services:
   rustypotato:
-    image: theprantadutta/rustypotato:latest
-    ports:
-      - "6379:6379"
-      - "9090:9090"
+    image: rustypotato/rustypotato:latest
     volumes:
       - rustypotato-data:/data
-    environment:
-      - RUSTYPOTATO_LOG_LEVEL=info
-    command: --aof-path /data/rustypotato.aof --metrics-port 9090
-    deploy:
-      replicas: 3
-      placement:
-        constraints:
-          - node.role == worker
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 1G
-          cpus: '0.5'
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-      update_config:
-        parallelism: 1
-        delay: 10s
-        failure_action: rollback
-
+      - ./docker/rustypotato.toml:/etc/rustypotato/rustypotato.toml:ro
+    command: rustypotato-server --config /etc/rustypotato/rustypotato.toml --bind 0.0.0.0
+    ports:
+      - "6379:6379"
+      - "7379:7379"
 volumes:
   rustypotato-data:
-    driver: local
 ```
 
-Deploy with:
-
-```bash
-docker stack deploy -c docker-stack.yml rustypotato-stack
-```
-
-## Kubernetes Deployment
-
-### Prerequisites
-
-- Kubernetes cluster (1.20+)
-- kubectl configured
-- Persistent storage class available
-
-### Basic Deployment
-
-```bash
-# Apply all manifests
-kubectl apply -f k8s/
-
-# Check deployment status
-kubectl get pods -l app=rustypotato
-kubectl get services rustypotato-service
-```
-
-### Production Kubernetes Setup
-
-#### Namespace and RBAC
+### Healthchecks
 
 ```yaml
-# k8s/namespace.yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: rustypotato
-  labels:
-    name: rustypotato
-
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: rustypotato
-  namespace: rustypotato
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  namespace: rustypotato
-  name: rustypotato-role
-rules:
-- apiGroups: [""]
-  resources: ["pods", "services", "endpoints"]
-  verbs: ["get", "list", "watch"]
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: rustypotato-rolebinding
-  namespace: rustypotato
-subjects:
-- kind: ServiceAccount
-  name: rustypotato
-  namespace: rustypotato
-roleRef:
-  kind: Role
-  name: rustypotato-role
-  apiGroup: rbac.authorization.k8s.io
+healthcheck:
+  test: ["CMD", "rustypotato-cli", "ping"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
 ```
 
-#### StatefulSet for Persistent Storage
+Or hit the HTTP `/health` endpoint:
 
 ```yaml
-# k8s/statefulset.yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:7379/health"]
+```
+
+---
+
+## Kubernetes
+
+A `StatefulSet` is the right shape — RustyPotato has stable on-disk
+state in the form of the AOF, and a single instance per replica.
+
+### Minimal StatefulSet
+
+```yaml
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: rustypotato
-  namespace: rustypotato
 spec:
   serviceName: rustypotato-headless
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: rustypotato
@@ -295,22 +157,20 @@ spec:
       labels:
         app: rustypotato
     spec:
-      serviceAccountName: rustypotato
       containers:
       - name: rustypotato
         image: rustypotato/rustypotato:latest
+        args:
+          - rustypotato-server
+          - --bind
+          - "0.0.0.0"
+          - --config
+          - /etc/rustypotato/rustypotato.toml
         ports:
         - containerPort: 6379
-          name: redis
-        - containerPort: 9090
+          name: resp
+        - containerPort: 7379
           name: metrics
-        env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: RUSTYPOTATO_BIND_ADDRESS
-          value: "0.0.0.0"
         volumeMounts:
         - name: data
           mountPath: /data
@@ -325,16 +185,13 @@ spec:
             cpu: "2000m"
         livenessProbe:
           exec:
-            command:
-            - rustypotato-cli
-            - ping
+            command: ["rustypotato-cli", "ping"]
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
-          exec:
-            command:
-            - rustypotato-cli
-            - ping
+          httpGet:
+            path: /health
+            port: 7379
           initialDelaySeconds: 5
           periodSeconds: 5
       volumes:
@@ -346,61 +203,40 @@ spec:
       name: data
     spec:
       accessModes: ["ReadWriteOnce"]
-      storageClassName: fast-ssd
+      storageClassName: standard
       resources:
         requests:
           storage: 20Gi
 ```
 
-#### Ingress Configuration
+### Service
 
 ```yaml
-# k8s/ingress.yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: rustypotato-ingress
-  namespace: rustypotato
-  annotations:
-    nginx.ingress.kubernetes.io/tcp-services-configmap: rustypotato/rustypotato-tcp
-    nginx.ingress.kubernetes.io/stream-snippet: |
-      upstream rustypotato {
-          server rustypotato-service:6379;
-      }
-spec:
-  rules:
-  - host: rustypotato.example.com
-    http:
-      paths:
-      - path: /metrics
-        pathType: Prefix
-        backend:
-          service:
-            name: rustypotato-service
-            port:
-              number: 9090
-
----
 apiVersion: v1
-kind: ConfigMap
+kind: Service
 metadata:
-  name: rustypotato-tcp
-  namespace: rustypotato
-data:
-  6379: "rustypotato/rustypotato-service:6379"
+  name: rustypotato
+spec:
+  selector:
+    app: rustypotato
+  ports:
+  - name: resp
+    port: 6379
+    targetPort: resp
+  - name: metrics
+    port: 7379
+    targetPort: metrics
 ```
 
-### Monitoring with Prometheus
+### Prometheus scraping
+
+If you run the Prometheus operator, a `ServiceMonitor` does it:
 
 ```yaml
-# k8s/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: rustypotato
-  namespace: rustypotato
-  labels:
-    app: rustypotato
 spec:
   selector:
     matchLabels:
@@ -411,45 +247,31 @@ spec:
     path: /metrics
 ```
 
-## Bare Metal Installation
+### Important: replicas = 1
 
-### System Requirements
+RustyPotato v0.2.0 is single-node. Setting `replicas > 1` does **not**
+give you replication or sharding — it gives you N independent stores
+that don't talk to each other. If you need HA, run multiple isolated
+instances and manage failover at the application level until clustering
+ships.
 
-- **OS**: Linux (Ubuntu 20.04+, CentOS 8+, RHEL 8+)
-- **CPU**: 2+ cores (4+ recommended for production)
-- **Memory**: 4GB+ RAM (8GB+ recommended for production)
-- **Storage**: SSD recommended for AOF files
-- **Network**: Gigabit Ethernet recommended
+---
 
-### Installation Steps
-
-#### Using Installation Script
+## Bare metal / systemd
 
 ```bash
-# Download and run installation script
-curl -fsSL https://install.rustypotato.dev | bash
-
-# Or download and inspect first
-curl -fsSL https://install.rustypotato.dev -o install.sh
-chmod +x install.sh
-./install.sh
-```
-
-#### Manual Installation
-
-```bash
-# Create user and directories
+# Create user and dirs
 sudo useradd -r -s /bin/false rustypotato
 sudo mkdir -p /etc/rustypotato /var/lib/rustypotato /var/log/rustypotato
 sudo chown rustypotato:rustypotato /var/lib/rustypotato /var/log/rustypotato
 
-# Download and install binaries
+# Install binaries
 curl -L https://github.com/theprantadutta/rustypotato/releases/latest/download/rustypotato-linux-x64.tar.gz | tar xz
-sudo cp rustypotato-linux-x64/rustypotato-* /usr/local/bin/
-sudo chmod +x /usr/local/bin/rustypotato-*
+sudo install -m 755 rustypotato-linux-x64/rustypotato-server /usr/local/bin/
+sudo install -m 755 rustypotato-linux-x64/rustypotato-cli /usr/local/bin/
 
-# Create configuration
-sudo tee /etc/rustypotato/rustypotato.toml > /dev/null <<EOF
+# Config
+sudo tee /etc/rustypotato/rustypotato.toml > /dev/null <<'EOF'
 [server]
 port = 6379
 bind_address = "127.0.0.1"
@@ -458,19 +280,16 @@ max_connections = 10000
 [storage]
 aof_enabled = true
 aof_path = "/var/lib/rustypotato/rustypotato.aof"
-aof_fsync = "everysec"
+aof_fsync_policy = "EverySecond"
 
 [logging]
 level = "info"
-file = "/var/log/rustypotato/rustypotato.log"
-
-[metrics]
-enabled = true
-port = 9090
+format = "Json"
+file_path = "/var/log/rustypotato/rustypotato.log"
 EOF
 
-# Create systemd service
-sudo tee /etc/systemd/system/rustypotato.service > /dev/null <<EOF
+# systemd unit
+sudo tee /etc/systemd/system/rustypotato.service > /dev/null <<'EOF'
 [Unit]
 Description=RustyPotato Key-Value Store
 After=network.target
@@ -484,477 +303,240 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65536
 
+# Resource bounds — RustyPotato has no internal memory limit, so the
+# kernel needs to be the backstop. Tune to your workload.
+MemoryMax=2G
+
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Enable and start service
 sudo systemctl daemon-reload
-sudo systemctl enable rustypotato
-sudo systemctl start rustypotato
+sudo systemctl enable --now rustypotato
+sudo systemctl status rustypotato
 ```
 
-### System Tuning
+### Kernel/file-descriptor tuning
 
-#### Kernel Parameters
+For high-connection-count workloads:
 
 ```bash
 # /etc/sysctl.d/99-rustypotato.conf
 net.core.somaxconn = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
-net.core.netdev_max_backlog = 5000
 net.ipv4.tcp_fin_timeout = 30
-net.ipv4.tcp_keepalive_time = 120
-net.ipv4.tcp_keepalive_probes = 3
-net.ipv4.tcp_keepalive_intvl = 15
 vm.overcommit_memory = 1
 vm.swappiness = 1
 
-# Apply changes
+# Apply
 sudo sysctl -p /etc/sysctl.d/99-rustypotato.conf
 ```
-
-#### File Limits
 
 ```bash
 # /etc/security/limits.d/99-rustypotato.conf
 rustypotato soft nofile 65536
 rustypotato hard nofile 65536
-rustypotato soft nproc 32768
-rustypotato hard nproc 32768
 ```
 
-## Cloud Deployments
+---
 
-### AWS
+## Persistence
 
-#### ECS Fargate
+RustyPotato uses an AOF (append-only file) for durability. Every
+mutating command is RESP-framed and appended to the file at
+`storage.aof_path`; on startup, the file is replayed through the
+command dispatch path to rebuild the in-memory state.
 
-```json
-{
-  "family": "rustypotato",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "1024",
-  "memory": "2048",
-  "executionRoleArn": "arn:aws:iam::ACCOUNT:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::ACCOUNT:role/rustypotato-task-role",
-  "containerDefinitions": [
-    {
-      "name": "rustypotato",
-      "image": "rustypotato/rustypotato:latest",
-      "portMappings": [
-        {
-          "containerPort": 6379,
-          "protocol": "tcp"
-        },
-        {
-          "containerPort": 9090,
-          "protocol": "tcp"
-        }
-      ],
-      "environment": [
-        {
-          "name": "RUSTYPOTATO_LOG_LEVEL",
-          "value": "info"
-        }
-      ],
-      "mountPoints": [
-        {
-          "sourceVolume": "rustypotato-data",
-          "containerPath": "/data"
-        }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/rustypotato",
-          "awslogs-region": "us-west-2",
-          "awslogs-stream-prefix": "ecs"
-        }
-      },
-      "healthCheck": {
-        "command": ["CMD-SHELL", "rustypotato-cli ping || exit 1"],
-        "interval": 30,
-        "timeout": 5,
-        "retries": 3,
-        "startPeriod": 60
-      }
-    }
-  ],
-  "volumes": [
-    {
-      "name": "rustypotato-data",
-      "efsVolumeConfiguration": {
-        "fileSystemId": "fs-12345678",
-        "transitEncryption": "ENABLED"
-      }
-    }
-  ]
-}
-```
+### Fsync policy
 
-#### EKS
+| Policy | Durability | Throughput |
+|---|---|---|
+| `Always` | Strongest. fsync after every write. | Slowest. |
+| `EverySecond` (default) | ~1 second of data may be lost on crash. | Fast. |
+| `Never` | OS decides. May lose minutes of data on crash. | Fastest. |
+
+`EverySecond` is the right default for almost everyone. Pick `Always`
+only if a one-second loss window is genuinely unacceptable, and
+benchmark before you do — it changes write throughput significantly.
+
+### Compaction (BGREWRITEAOF)
+
+The AOF grows unboundedly otherwise. Run `BGREWRITEAOF` periodically to
+compact it:
 
 ```bash
-# Create EKS cluster
-eksctl create cluster --name rustypotato-cluster --region us-west-2
-
-# Deploy RustyPotato
-kubectl apply -f k8s/
-
-# Create load balancer
-kubectl expose deployment rustypotato --type=LoadBalancer --port=6379
+rustypotato-cli interactive
+> BGREWRITEAOF
 ```
 
-### Google Cloud Platform
+During the rewrite, new mutations are buffered and merged in at the
+end. The old file is replaced atomically when the rewrite completes.
 
-#### GKE
-
-```bash
-# Create GKE cluster
-gcloud container clusters create rustypotato-cluster \
-  --zone us-central1-a \
-  --num-nodes 3 \
-  --machine-type n1-standard-2
-
-# Deploy RustyPotato
-kubectl apply -f k8s/
-```
-
-#### Cloud Run
-
-```yaml
-# cloudrun.yaml
-apiVersion: serving.knative.dev/v1
-kind: Service
-metadata:
-  name: rustypotato
-  annotations:
-    run.googleapis.com/ingress: all
-spec:
-  template:
-    metadata:
-      annotations:
-        autoscaling.knative.dev/maxScale: "10"
-        run.googleapis.com/cpu-throttling: "false"
-        run.googleapis.com/memory: "2Gi"
-        run.googleapis.com/cpu: "1000m"
-    spec:
-      containers:
-      - image: rustypotato/rustypotato:latest
-        ports:
-        - containerPort: 6379
-        env:
-        - name: RUSTYPOTATO_BIND_ADDRESS
-          value: "0.0.0.0"
-        resources:
-          limits:
-            memory: "2Gi"
-            cpu: "1000m"
-```
-
-### Azure
-
-#### AKS
-
-```bash
-# Create AKS cluster
-az aks create \
-  --resource-group rustypotato-rg \
-  --name rustypotato-cluster \
-  --node-count 3 \
-  --node-vm-size Standard_D2s_v3 \
-  --enable-addons monitoring
-
-# Deploy RustyPotato
-kubectl apply -f k8s/
-```
-
-## Configuration
-
-### Configuration File Structure
-
-```toml
-# /etc/rustypotato/rustypotato.toml
-
-[server]
-port = 6379
-bind_address = "0.0.0.0"
-max_connections = 10000
-tcp_keepalive = true
-tcp_nodelay = true
-
-[storage]
-# Persistence
-aof_enabled = true
-aof_path = "/data/rustypotato.aof"
-aof_fsync = "everysec"  # always, everysec, no
-
-# Memory management
-max_memory = "2GB"
-eviction_policy = "lru"  # lru, lfu, random, ttl
-
-[logging]
-level = "info"  # trace, debug, info, warn, error
-format = "json"  # json, pretty
-file = "/var/log/rustypotato/rustypotato.log"
-rotation = "daily"  # daily, hourly, size
-
-[metrics]
-enabled = true
-port = 9090
-path = "/metrics"
-
-[security]
-# Authentication (when implemented)
-auth_enabled = false
-password = ""
-
-# TLS (when implemented)
-tls_enabled = false
-cert_file = ""
-key_file = ""
-```
-
-### Environment Variables
-
-All configuration options can be overridden with environment variables:
-
-```bash
-export RUSTYPOTATO_PORT=6380
-export RUSTYPOTATO_BIND_ADDRESS="0.0.0.0"
-export RUSTYPOTATO_AOF_PATH="/data/rustypotato.aof"
-export RUSTYPOTATO_LOG_LEVEL="debug"
-export RUSTYPOTATO_MAX_MEMORY="4GB"
-```
-
-## Monitoring and Observability
-
-### Metrics
-
-RustyPotato exposes Prometheus-compatible metrics on `/metrics` endpoint:
-
-```bash
-# Check metrics endpoint
-curl http://localhost:9090/metrics
-```
-
-Key metrics include:
-- `rustypotato_commands_total` - Total commands executed
-- `rustypotato_command_duration_seconds` - Command execution time
-- `rustypotato_memory_usage_bytes` - Memory usage
-- `rustypotato_connections_active` - Active connections
-- `rustypotato_aof_writes_total` - AOF write operations
-
-### Logging
-
-Structured logging with configurable levels and formats:
-
-```bash
-# View logs (systemd)
-journalctl -u rustypotato -f
-
-# View logs (Docker)
-docker logs -f rustypotato
-
-# View logs (Kubernetes)
-kubectl logs -f deployment/rustypotato
-```
-
-### Health Checks
-
-```bash
-# Basic health check
-rustypotato-cli ping
-
-# Detailed server info
-rustypotato-cli info
-
-# Check metrics endpoint
-curl http://localhost:9090/health
-```
-
-## Security
-
-### Network Security
-
-```bash
-# Firewall rules (iptables)
-sudo iptables -A INPUT -p tcp --dport 6379 -s 10.0.0.0/8 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 6379 -j DROP
-
-# Firewall rules (ufw)
-sudo ufw allow from 10.0.0.0/8 to any port 6379
-sudo ufw deny 6379
-```
-
-### TLS Configuration (Future Feature)
-
-```toml
-[security]
-tls_enabled = true
-cert_file = "/etc/rustypotato/tls/server.crt"
-key_file = "/etc/rustypotato/tls/server.key"
-ca_file = "/etc/rustypotato/tls/ca.crt"
-```
-
-### Authentication (Future Feature)
-
-```toml
-[security]
-auth_enabled = true
-password = "your-secure-password"
-```
-
-## Performance Tuning
-
-### Memory Optimization
-
-```toml
-[storage]
-max_memory = "8GB"
-eviction_policy = "lru"
-```
-
-### Network Optimization
-
-```toml
-[server]
-tcp_keepalive = true
-tcp_nodelay = true
-max_connections = 50000
-```
-
-### Persistence Optimization
-
-```toml
-[storage]
-aof_fsync = "everysec"  # Balance between durability and performance
-```
-
-### System-level Tuning
-
-```bash
-# Increase file descriptor limits
-echo "* soft nofile 65536" >> /etc/security/limits.conf
-echo "* hard nofile 65536" >> /etc/security/limits.conf
-
-# Optimize TCP settings
-echo "net.core.somaxconn = 65535" >> /etc/sysctl.conf
-echo "net.ipv4.tcp_max_syn_backlog = 65535" >> /etc/sysctl.conf
-sysctl -p
-```
-
-## Backup and Recovery
-
-### AOF Backup
-
-```bash
-# Create backup
-cp /var/lib/rustypotato/rustypotato.aof /backup/rustypotato-$(date +%Y%m%d).aof
-
-# Automated backup script
-#!/bin/bash
-BACKUP_DIR="/backup"
-AOF_FILE="/var/lib/rustypotato/rustypotato.aof"
-DATE=$(date +%Y%m%d-%H%M%S)
-
-# Create backup
-cp "$AOF_FILE" "$BACKUP_DIR/rustypotato-$DATE.aof"
-
-# Compress old backups
-find "$BACKUP_DIR" -name "*.aof" -mtime +1 -exec gzip {} \;
-
-# Remove old backups (keep 30 days)
-find "$BACKUP_DIR" -name "*.aof.gz" -mtime +30 -delete
-```
+There is no automatic trigger in v0.2.0 — schedule it yourself via
+cron / a Kubernetes CronJob / a systemd timer.
 
 ### Recovery
 
+On startup, if `aof_enabled = true` and the AOF file exists,
+RustyPotato replays it before accepting connections. During replay the
+server returns `LOADING ...` errors to any incoming command. Replay is
+typically much faster than the original write rate because there's no
+network or fsync overhead per command.
+
+---
+
+## Monitoring
+
+The server starts an HTTP monitoring server at
+`bind_address:(port + 1000)`. Three routes:
+
+- `GET /health` — 200 if the server is up. Use as a liveness probe.
+- `GET /metrics` — Prometheus exposition format. Use as a scrape target.
+- `GET /info` — JSON build/runtime info (version, uptime, OS, arch).
+
+The monitoring server binds to the same address as the main RESP
+server, so if `bind_address = "0.0.0.0"` your `/metrics` endpoint is
+also on `0.0.0.0`. Restrict it with a firewall or by running RustyPotato
+behind a network ACL.
+
+### Useful Prometheus metrics
+
+- `rustypotato_commands_total{command="GET",status="ok"}` — total
+  commands executed, broken down by name and status
+- `rustypotato_command_duration_seconds_*` — histogram of command
+  latencies (use `histogram_quantile` to derive p50/p95/p99)
+- `rustypotato_connections_active` — current connection count
+- `rustypotato_aof_writes_total` — AOF mutation count
+- `rustypotato_aof_fsync_duration_seconds_*` — fsync histogram
+
+The repo ships a Grafana dashboard at
+`docker/grafana/dashboards/rustypotato.json` — import it and point it
+at your Prometheus.
+
+---
+
+## Backup and recovery
+
+The AOF file is the entire on-disk state. Backups are file copies:
+
 ```bash
-# Stop RustyPotato
+#!/bin/bash
+# /usr/local/bin/rustypotato-backup
+set -euo pipefail
+BACKUP_DIR=/var/backups/rustypotato
+AOF=/var/lib/rustypotato/rustypotato.aof
+DATE=$(date +%Y%m%d-%H%M%S)
+
+mkdir -p "$BACKUP_DIR"
+cp "$AOF" "$BACKUP_DIR/rustypotato-$DATE.aof"
+gzip "$BACKUP_DIR/rustypotato-$DATE.aof"
+
+# Retain 30 days
+find "$BACKUP_DIR" -name 'rustypotato-*.aof.gz' -mtime +30 -delete
+```
+
+Run it from cron or a systemd timer. Copying a live AOF is safe: the
+file is append-only, so the worst case is a backup that's missing the
+final partial entry, which the AOF replay logic handles gracefully on
+restore.
+
+To restore:
+
+```bash
 sudo systemctl stop rustypotato
-
-# Restore from backup
-cp /backup/rustypotato-20241201.aof /var/lib/rustypotato/rustypotato.aof
-chown rustypotato:rustypotato /var/lib/rustypotato/rustypotato.aof
-
-# Start RustyPotato
+gunzip -c /var/backups/rustypotato/rustypotato-20260101-120000.aof.gz \
+  > /var/lib/rustypotato/rustypotato.aof
+sudo chown rustypotato:rustypotato /var/lib/rustypotato/rustypotato.aof
 sudo systemctl start rustypotato
 ```
 
+---
+
+## Network security
+
+RustyPotato has **no built-in authentication or TLS** in v0.2.0. Don't
+expose the RESP port to untrusted networks. Use:
+
+- A firewall rule limiting source IPs
+- A private subnet / VPC
+- A service mesh (Istio, Linkerd) for mTLS
+- A TLS-terminating sidecar (stunnel, Envoy, nginx-stream)
+
+Bare iptables example for a single trusted CIDR:
+
+```bash
+sudo iptables -A INPUT -p tcp --dport 6379 -s 10.0.0.0/8 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 6379 -j DROP
+
+sudo iptables -A INPUT -p tcp --dport 7379 -s 10.0.0.0/8 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 7379 -j DROP
+```
+
+---
+
 ## Troubleshooting
 
-### Common Issues
-
-#### Connection Refused
+### Connection refused
 
 ```bash
-# Check if service is running
-sudo systemctl status rustypotato
+# Is the process running?
+systemctl status rustypotato       # systemd
+docker ps | grep rustypotato       # docker
 
-# Check port binding
-sudo netstat -tlnp | grep 6379
+# Is the port listening?
+ss -tlnp | grep 6379               # Linux
+netstat -ano | findstr :6379       # Windows
 
-# Check firewall
-sudo iptables -L | grep 6379
+# Firewall?
+sudo iptables -L -n | grep 6379
 ```
 
-#### High Memory Usage
+### `LOADING` errors on startup
+
+The server is replaying its AOF. This is expected and bounded — wait
+for it to finish. If replay takes too long, consider running
+`BGREWRITEAOF` periodically to keep the AOF compact.
+
+### High memory usage
+
+RustyPotato has no internal memory cap in v0.2.0. To bound resident
+memory:
+
+- **systemd:** `MemoryMax=2G` in the unit file.
+- **Kubernetes:** `resources.limits.memory: 2Gi`.
+- **Docker:** `--memory 2g` on `docker run` or `mem_limit: 2g` in
+  Compose.
+
+The kernel will OOM-kill the process when it crosses the bound. The
+AOF is durable, so on restart the state recovers.
+
+### Slow GETs
+
+Run `cargo run --release --bin network_bench` (or `redis-benchmark`)
+to confirm whether it's a server-side issue or a client/network issue.
+See [BENCHMARKING.md](BENCHMARKING.md).
+
+### AOF file too large
 
 ```bash
-# Check memory usage
-rustypotato-cli info memory
-
-# Monitor with top
-top -p $(pgrep rustypotato-server)
-
-# Check for memory leaks
-valgrind --tool=memcheck --leak-check=full rustypotato-server
+rustypotato-cli interactive
+> BGREWRITEAOF
 ```
 
-#### Performance Issues
+This compacts the file in-place. There's no downtime.
+
+### Logs
 
 ```bash
-# Check system resources
-htop
-
-# Monitor network connections
-ss -tuln | grep 6379
-
-# Check disk I/O
-iostat -x 1
-
-# Profile with perf
-perf record -g rustypotato-server
-perf report
-```
-
-### Log Analysis
-
-```bash
-# Search for errors
-journalctl -u rustypotato | grep ERROR
-
-# Monitor real-time logs
+# systemd
 journalctl -u rustypotato -f
 
-# Check specific time range
-journalctl -u rustypotato --since "2024-01-01 00:00:00" --until "2024-01-01 23:59:59"
+# docker
+docker logs -f rustypotato
+
+# kubernetes
+kubectl logs -f statefulset/rustypotato
 ```
 
-### Debug Mode
-
-```bash
-# Run with debug logging
-RUSTYPOTATO_LOG_LEVEL=debug rustypotato-server
-
-# Enable trace logging
-RUSTYPOTATO_LOG_LEVEL=trace rustypotato-server
-```
-
-For additional support, please check:
-- [GitHub Issues](https://github.com/theprantadutta/rustypotato/issues)
-- [Documentation Wiki](https://github.com/theprantadutta/rustypotato/wiki)
-- [Community Discussions](https://github.com/theprantadutta/rustypotato/discussions)
+For more verbosity, restart with `--log-level debug` or set
+`RUSTYPOTATO_LOGGING_LEVEL=debug`.

@@ -309,7 +309,7 @@ struct ServerArgs {
 fn parse_args() -> ServerArgs {
     let matches = Command::new("rustypotato-server")
         .version(env!("CARGO_PKG_VERSION"))
-        .author("RustyPotato Team")
+        .author("Pranta Dutta <prantadutta1997@gmail.com>")
         .about("High-performance Redis-compatible key-value store")
         .long_about("RustyPotato is a high-performance, Redis-compatible key-value store written in Rust. \
                     It provides excellent performance, memory safety, and compatibility with Redis clients.")
