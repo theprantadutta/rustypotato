@@ -1,5 +1,10 @@
 name: Release
 
+# Triggered automatically on `git push origin v*` (e.g. `v0.2.0`),
+# or manually via the Actions tab → Release → Run workflow with
+# the tag name. The tag must already exist on the remote — this
+# workflow does not create tags.
+
 on:
   push:
     tags:
@@ -7,79 +12,30 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release'
+        description: 'Existing tag to release (e.g. v0.2.0)'
         required: true
-        default: 'v0.1.0'
 
 env:
   CARGO_TERM_COLOR: always
 
-# Add permissions for the workflow
 permissions:
   contents: write
   packages: write
-  pull-requests: read
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      tag_name: ${{ steps.tag.outputs.tag }}
-      release_id: ${{ steps.create_release.outputs.id }}
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Get tag
-      id: tag
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-        else
-          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Create Release
-      id: create_release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.tag.outputs.tag }}
-        name: RustyPotato ${{ steps.tag.outputs.tag }}
-        body: |
-          ## What's Changed
-          
-          This release includes performance improvements, bug fixes, and new features.
-          
-          ### Installation
-          
-          #### Docker
-          ```bash
-          docker pull theprantadutta/rustypotato:${{ steps.tag.outputs.tag }}
-          ```
-          
-          #### Pre-built Binaries
-          Download the appropriate binary for your platform from the assets below.
-          
-          #### Build from Source
-          ```bash
-          git clone https://github.com/theprantadutta/rustypotato.git
-          cd rustypotato
-          git checkout ${{ steps.tag.outputs.tag }}
-          cargo build --release
-          ```
-          
-          ### Checksums
-          
-          See the `checksums.txt` file for SHA256 checksums of all release assets.
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-
+  # ──────────────────────────────────────────────────────────────
+  # Build all platform binaries.
+  # Each job tars/zips its artifacts, computes a SHA256 sidecar,
+  # and uploads them to the release directly. The .sha256 files are
+  # also archived as workflow artifacts so the aggregate-checksums
+  # job downstream can read them and generate a real
+  # checksums.txt.
+  # ──────────────────────────────────────────────────────────────
   build-binaries:
-    name: Build Binaries
-    needs: create-release
+    name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -102,223 +58,286 @@ jobs:
             target: aarch64-apple-darwin
             name: rustypotato-macos-arm64
             archive: tar.gz
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
-    
-    - name: Install cross-compilation tools
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
-        echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-    
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    
-    - name: Build binaries
-      run: cargo build --release --target ${{ matrix.target }}
-    
-    - name: Prepare release assets (Unix)
-      if: matrix.archive == 'tar.gz'
-      run: |
-        mkdir -p release/${{ matrix.name }}
-        cp target/${{ matrix.target }}/release/rustypotato-server release/${{ matrix.name }}/
-        cp target/${{ matrix.target }}/release/rustypotato-cli release/${{ matrix.name }}/
-        cp README.md LICENSE-MIT LICENSE-APACHE release/${{ matrix.name }}/
-        cd release
-        tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
-        # Use shasum on macOS, sha256sum on Linux
-        if command -v sha256sum >/dev/null 2>&1; then
-          sha256sum ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
-        else
-          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
-        fi
-    
-    - name: Prepare release assets (Windows)
-      if: matrix.archive == 'zip'
-      run: |
-        mkdir release/${{ matrix.name }}
-        cp target/${{ matrix.target }}/release/rustypotato-server.exe release/${{ matrix.name }}/
-        cp target/${{ matrix.target }}/release/rustypotato-cli.exe release/${{ matrix.name }}/
-        cp README.md, LICENSE-MIT, LICENSE-APACHE release/${{ matrix.name }}/
-        cd release
-        Compress-Archive -Path ${{ matrix.name }} -DestinationPath ${{ matrix.name }}.zip
-        $hash = (Get-FileHash ${{ matrix.name }}.zip -Algorithm SHA256).Hash.ToLower()
-        "$hash  ${{ matrix.name }}.zip" | Out-File -FilePath ${{ matrix.name }}.zip.sha256 -Encoding ASCII
-      shell: powershell
-    
-    - name: Upload release assets
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ needs.create-release.outputs.tag_name }}
-        files: |
-          ./release/${{ matrix.name }}.${{ matrix.archive }}
-          ./release/${{ matrix.name }}.${{ matrix.archive }}.sha256
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
-  build-docker:
-    name: Build Docker Images
-    needs: create-release
-    runs-on: ubuntu-latest
-    outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
-      image-metadata: ${{ steps.meta.outputs.json }}
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Get tag
-      id: tag
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-        else
-          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: theprantadutta/rustypotato
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=raw,value=latest,enable={{is_default_branch}}
-    
-    - name: Build Docker image (no push)
-      id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64,linux/arm/v7
-        push: false
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        outputs: type=image,name=theprantadutta/rustypotato,push=false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
 
-  create-checksums:
-    name: Create Checksums File
-    needs: [create-release, build-binaries]
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }} --bins
+
+      - name: Package archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p release/${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/rustypotato-server release/${{ matrix.name }}/
+          cp target/${{ matrix.target }}/release/rustypotato-cli release/${{ matrix.name }}/
+          cp README.md LICENSE-MIT LICENSE-APACHE release/${{ matrix.name }}/
+          cd release
+          tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+          else
+            shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
+          fi
+
+      - name: Package archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path release/${{ matrix.name }} | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/rustypotato-server.exe release/${{ matrix.name }}/
+          Copy-Item target/${{ matrix.target }}/release/rustypotato-cli.exe release/${{ matrix.name }}/
+          Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE release/${{ matrix.name }}/
+          Set-Location release
+          Compress-Archive -Path ${{ matrix.name }} -DestinationPath ${{ matrix.name }}.zip
+          $hash = (Get-FileHash ${{ matrix.name }}.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.name }}.zip" | Out-File -FilePath ${{ matrix.name }}.zip.sha256 -Encoding ASCII
+
+      - name: Upload archive + sha256 to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            ./release/${{ matrix.name }}.${{ matrix.archive }}
+            ./release/${{ matrix.name }}.${{ matrix.archive }}.sha256
+          fail_on_unmatched_files: true
+
+      - name: Save sha256 as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256-${{ matrix.name }}
+          path: ./release/${{ matrix.name }}.${{ matrix.archive }}.sha256
+          retention-days: 1
+
+  # ──────────────────────────────────────────────────────────────
+  # Aggregate every per-asset .sha256 into a real checksums.txt,
+  # extract the matching CHANGELOG.md section, and finalize the
+  # release body. Runs after all binaries land.
+  # ──────────────────────────────────────────────────────────────
+  finalize-release:
+    name: Finalize release notes + checksums
+    needs: [build-binaries]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Create consolidated checksums file
-      run: |
-        echo "# RustyPotato Release Checksums" > checksums.txt
-        echo "" >> checksums.txt
-        echo "Generated on: $(date -u)" >> checksums.txt
-        echo "Release: ${{ needs.create-release.outputs.tag_name }}" >> checksums.txt
-        echo "" >> checksums.txt
-        echo "Individual checksum files are available alongside each binary." >> checksums.txt
-        echo "This file serves as a reference for all release assets." >> checksums.txt
-    
-    - name: Upload checksums file
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ needs.create-release.outputs.tag_name }}
-        files: ./checksums.txt
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
-  # Publishing jobs - only run after all builds succeed
-  push-docker:
-    name: Push Docker Images to Hub
-    needs: [create-release, build-binaries, build-docker, create-checksums]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Download all sha256 sidecars
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sha256-*
+          path: sha256-files
+          merge-multiple: true
+
+      - name: Build aggregate checksums.txt
+        run: |
+          {
+            echo "# RustyPotato Release Checksums"
+            echo "# Tag: ${{ steps.tag.outputs.tag }}"
+            echo "# Generated: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo ""
+          } > checksums.txt
+          # Each sidecar is a single "<hash>  <filename>" line.
+          # Concatenate them in deterministic platform order.
+          for sidecar in $(ls sha256-files/*.sha256 | sort); do
+            cat "$sidecar" >> checksums.txt
+          done
+
+      - name: Build release body
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          # Strip leading "v" so "v0.2.0" matches "## [0.2.0]" in
+          # CHANGELOG.md.
+          VERSION="${TAG#v}"
+
+          # Pull lines from `## [VERSION]` up to (but not including)
+          # the next `## [` heading. Use `index()` (substring match
+          # anchored at column 1) rather than a regex, so we don't
+          # have to fight bracket-escaping in awk's gawk vs busybox
+          # dialects.
+          awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { found=1; print; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG entry for ${TAG}. See the commit history." > release-notes.md
+          fi
+
+          # Append install + checksums boilerplate.
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Installation"
+            echo ""
+            echo "### Docker"
+            echo ""
+            echo '```bash'
+            echo "docker pull theprantadutta/rustypotato:${TAG}"
+            echo '```'
+            echo ""
+            echo "### Pre-built binaries"
+            echo ""
+            echo "Pick the archive for your platform from the assets below."
+            echo "Each ships with a \`.sha256\` sidecar; the aggregated"
+            echo "\`checksums.txt\` lists every hash in one place."
+            echo ""
+            echo "### Build from source"
+            echo ""
+            echo '```bash'
+            echo "git clone https://github.com/theprantadutta/rustypotato.git"
+            echo "cd rustypotato"
+            echo "git checkout ${TAG}"
+            echo "cargo build --release"
+            echo '```'
+            echo ""
+            echo "## Checksums"
+            echo ""
+            echo "See [\`checksums.txt\`](https://github.com/theprantadutta/rustypotato/releases/download/${TAG}/checksums.txt) attached to this release for SHA256 hashes of every binary."
+          } >> release-notes.md
+
+      - name: Update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: RustyPotato ${{ steps.tag.outputs.tag }}
+          body_path: release-notes.md
+          files: ./checksums.txt
+          draft: false
+          prerelease: false
+
+  # ──────────────────────────────────────────────────────────────
+  # Build and push the multi-arch Docker image. Runs in parallel
+  # with the binary builds — the image build is independent.
+  # ──────────────────────────────────────────────────────────────
+  docker:
+    name: Build & push Docker image
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Get tag
-      id: tag
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-        else
-          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-    
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: theprantadutta/rustypotato
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=raw,value=latest,enable={{is_default_branch}}
-    
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64,linux/arm/v7
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: theprantadutta/rustypotato
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ──────────────────────────────────────────────────────────────
+  # Publish to crates.io. Best-effort — `cargo publish` errors if
+  # the version is already on the registry, so we don't fail the
+  # release if a re-run hits an existing version.
+  # ──────────────────────────────────────────────────────────────
   publish-crate:
     name: Publish to crates.io
-    needs: [create-release, build-binaries, build-docker, create-checksums]
+    needs: [build-binaries]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-    
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    
-    - name: Publish to crates.io
-      run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      continue-on-error: true  # Don't fail if already published
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
-  update-homebrew:
-    name: Update Homebrew Formula
-    needs: [create-release, build-binaries, build-docker, create-checksums]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Update Homebrew formula
-      uses: dawidd6/action-homebrew-bump-formula@v3
-      with:
-        token: ${{ secrets.HOMEBREW_TOKEN }}
-        formula: rustypotato
-      continue-on-error: true
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Publish
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
