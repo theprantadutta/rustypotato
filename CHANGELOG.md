@@ -7,6 +7,48 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 Pre-1.0, breaking changes can land in any minor release; we'll always
 call them out explicitly here.
 
+## [0.2.1] — 2026-05-05
+
+Tooling-only release. Same runtime behavior as v0.2.0; bumped because
+the v0.2.0 tag tripped CI on `cargo fmt --check` before any release
+artifacts could be published, and because the release pipeline that
+would have produced those artifacts had its own issues. v0.2.1 is the
+first version of the v0.2 line that actually ships binaries.
+
+### Fixed
+- `cargo fmt --all -- --check` failure on
+  `tests/tcp_server_integration.rs` (a long `assert_eq!` macro call
+  was past the wrap limit). The line is now rustfmt-compliant.
+
+### Changed — release pipeline
+The GitHub Actions `release.yml` was rewritten:
+
+- The release body now extracts the matching `## [VERSION]` section
+  from `CHANGELOG.md` automatically, replacing the previous
+  one-size-fits-all "performance improvements, bug fixes, and new
+  features" boilerplate. Falls back to a short blurb if the section
+  is missing.
+- `checksums.txt` is now a real aggregate: every per-platform
+  `.sha256` sidecar is preserved as a workflow artifact during
+  build, then a finalize step concatenates them in deterministic
+  order and uploads the result. Previously the file was a
+  placeholder that just told readers to look at the individual
+  sidecars.
+- Dropped the `update-homebrew` job — no Homebrew tap exists, so
+  the job was failing silently every release with
+  `continue-on-error: true`.
+- Folded the redundant "build Docker, no push" step into the
+  single `docker` job that builds and pushes in one pass.
+- Each job now pins `actions/checkout` to the release tag so a
+  re-run after a force-push to master still produces the right
+  artifacts.
+
+### Not changed
+No source/runtime/protocol changes. v0.2.1 against any client is
+indistinguishable from a hypothetical v0.2.0 that had cleared CI.
+
+---
+
 ## [0.2.0] — 2026-05-05
 
 The first release where the README's claims actually match the
