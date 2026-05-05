@@ -327,6 +327,14 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     glob_match_bytes(pattern.as_bytes(), text.as_bytes())
 }
 
+// `collapsible_match` would have us collapse the `b'\\' => { if … }`
+// arm into `b'\\' if … =>` with the same body. Looks identical, isn't:
+// when the guard fails the whole arm is rejected and the *next* arms
+// run, which means `c if c == t[ti]` later in the match captures a
+// stray `\` byte in the text and treats `\x` as a literal `\`-then-`x`
+// instead of an escaped `x`. So we keep the inner `if` and silence
+// the lint at the function level.
+#[allow(clippy::collapsible_match)]
 fn glob_match_bytes(p: &[u8], t: &[u8]) -> bool {
     let (mut pi, mut ti) = (0usize, 0usize);
     // Backtrack indices for the most recent `*`.
@@ -335,12 +343,10 @@ fn glob_match_bytes(p: &[u8], t: &[u8]) -> bool {
         if pi < p.len() {
             match p[pi] {
                 b'\\' => {
-                    // Backslash escapes the next pattern byte. Match when
-                    // there IS a next byte AND it equals the current text
-                    // byte; otherwise fall through to the backtrack branch
-                    // below — never let `c if c == t[ti]` capture a stray
-                    // backslash, that would treat `\x` as a literal `\`
-                    // followed by `x` instead of an escaped `x`.
+                    // Backslash escapes the next pattern byte. See the
+                    // function-level `#[allow(collapsible_match)]` — the
+                    // obvious "fold into the arm guard" rewrite is a
+                    // semantic bug.
                     if pi + 1 < p.len() && p[pi + 1] == t[ti] {
                         pi += 2;
                         ti += 1;
