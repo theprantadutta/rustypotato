@@ -465,7 +465,10 @@ async fn test_server_true_pipelining() {
     for i in 0..16u32 {
         expected.extend_from_slice(format!("$4\r\nv{i:03}\r\n").as_bytes());
     }
-    assert_eq!(get_received, expected, "pipelined GETs disagreed with values");
+    assert_eq!(
+        get_received, expected,
+        "pipelined GETs disagreed with values"
+    );
 
     drop(stream);
     server.shutdown().await.unwrap();
