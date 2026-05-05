@@ -10,7 +10,6 @@ use crate::error::{Result, RustyPotatoError};
 use crate::metrics::{ConnectionEvent, MetricsCollector, Timer};
 use crate::network::{encode_error, ClientConnection, ConnectionPool, RespCodec};
 use crate::storage::{MemoryStore, PersistenceManager};
-use bytes::BytesMut;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -507,7 +506,9 @@ impl TcpServer {
             max_array_length: config.network.max_array_length,
             max_buffer_size: config.network.max_buffer_size,
         });
-        let mut buffer = BytesMut::with_capacity(4096);
+        // Per-read scratch buffer. The codec accumulates partial frames
+        // internally, so we don't need to maintain a parallel BytesMut.
+        let mut read_buf = vec![0u8; 4096];
         let (client_id, remote_addr) = {
             let conn = connection.lock().await;
             (conn.client_id, conn.remote_addr)
@@ -528,7 +529,7 @@ impl TcpServer {
                     Duration::from_secs(config.network.read_timeout),
                     async {
                         let mut conn = connection.lock().await;
-                        conn.stream.read_buf(&mut buffer).await
+                        conn.stream.read(&mut read_buf).await
                     }
                 ) => {
                     match result {
@@ -549,7 +550,7 @@ impl TcpServer {
 
                             match Self::process_buffer(
                                 &mut codec,
-                                &mut buffer,
+                                &read_buf[..bytes_read],
                                 &connection,
                                 &storage,
                                 &command_registry,
@@ -643,7 +644,15 @@ impl TcpServer {
         Ok(())
     }
 
-    /// Process data in the buffer and execute commands.
+    /// Process newly-read bytes and drain every complete command the
+    /// codec can give us.
+    ///
+    /// `new_data` is the bytes just read from the socket; we feed them
+    /// to the codec exactly once, then loop calling `decode_with_frame`
+    /// with an empty slice to extract subsequent commands from the
+    /// codec's internal buffer. This is what makes pipelining work: a
+    /// single read may carry N complete RESP frames and we need to
+    /// dispatch all N before going back to the socket.
     ///
     /// Returns `(processed_count, should_close)`. `should_close` is set
     /// when a terminal command (currently only `QUIT`) was successfully
@@ -652,7 +661,7 @@ impl TcpServer {
     #[allow(clippy::too_many_arguments)]
     async fn process_buffer(
         codec: &mut RespCodec,
-        buffer: &mut BytesMut,
+        new_data: &[u8],
         connection: &Arc<tokio::sync::Mutex<ClientConnection>>,
         storage: &MemoryStore,
         command_registry: &CommandRegistry,
@@ -663,13 +672,19 @@ impl TcpServer {
     ) -> Result<(u64, bool)> {
         let mut commands_processed = 0u64;
         let mut should_close = false;
+        let mut data_to_feed: &[u8] = new_data;
 
-        // Try to decode commands from the buffer
-        while !buffer.is_empty() {
-            let buffer_data = buffer.clone().freeze();
-
-            match codec.decode_with_frame(&buffer_data) {
+        // Drain every complete command from the codec. First iteration
+        // feeds the new bytes; subsequent iterations pass an empty slice
+        // so we don't double-append.
+        loop {
+            match codec.decode_with_frame(data_to_feed) {
                 Ok(Some((mut command, frame))) => {
+                    // The new bytes (if any) have been absorbed by the
+                    // codec; subsequent iterations drain its internal
+                    // buffer with an empty slice.
+                    data_to_feed = &[];
+
                     let (client_id, remote_addr) = {
                         let conn = connection.lock().await;
                         (conn.client_id, conn.remote_addr)
@@ -754,7 +769,6 @@ impl TcpServer {
                                 // QUIT: break out of the parse loop so
                                 // the caller closes the connection.
                                 should_close = true;
-                                buffer.clear();
                                 break;
                             }
                         }
@@ -766,19 +780,10 @@ impl TcpServer {
                             return Err(e);
                         }
                     }
-
-                    // Clear processed data from buffer
-                    buffer.clear();
                 }
                 Ok(None) => {
-                    // Need more data - this is normal
-                    debug!(
-                        "Need more data to complete command parsing for client {}",
-                        {
-                            let conn = connection.lock().await;
-                            conn.client_id
-                        }
-                    );
+                    // Codec needs more bytes for the next frame; we'll
+                    // come back here after the next read.
                     break;
                 }
                 Err(e) => {
@@ -792,18 +797,11 @@ impl TcpServer {
                         client_id, remote_addr, e
                     );
 
-                    // Convert to RustyPotatoError for consistent error handling
-                    let protocol_error = RustyPotatoError::ProtocolError {
+                    return Err(RustyPotatoError::ProtocolError {
                         message: e.to_string(),
                         command: None,
                         source: Some(Box::new(e)),
-                    };
-
-                    // Clear buffer to prevent repeated errors
-                    buffer.clear();
-
-                    // Return the error to be handled by the caller
-                    return Err(protocol_error);
+                    });
                 }
             }
         }

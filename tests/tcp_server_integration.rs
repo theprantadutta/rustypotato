@@ -403,6 +403,75 @@ async fn test_server_graceful_shutdown() {
 }
 
 #[tokio::test]
+async fn test_server_true_pipelining() {
+    // Real pipelining: write N RESP frames in a single TCP write, then
+    // read back N responses. Regression test for a bug where the server
+    // processed only the first command per read because process_buffer
+    // wiped the outer buffer instead of letting the codec drain its
+    // internal one.
+    let (server, addr) = create_and_start_test_server().await;
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+
+    // Build 16 SET commands concatenated into one buffer.
+    let mut batch = Vec::new();
+    for i in 0..16u32 {
+        batch.extend_from_slice(
+            format!("*3\r\n$3\r\nSET\r\n$5\r\nkey{i:02}\r\n$4\r\nv{i:03}\r\n").as_bytes(),
+        );
+    }
+    stream.write_all(&batch).await.unwrap();
+    stream.flush().await.unwrap();
+
+    // Drain 16 OK responses (`+OK\r\n` = 5 bytes each = 80 bytes).
+    let mut received = Vec::with_capacity(80);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while received.len() < 80 {
+        let mut chunk = [0u8; 256];
+        let n = tokio::time::timeout_at(deadline, stream.read(&mut chunk))
+            .await
+            .expect("server stalled while draining pipelined batch")
+            .expect("read failed");
+        assert!(n > 0, "server closed connection mid-batch");
+        received.extend_from_slice(&chunk[..n]);
+    }
+    assert_eq!(
+        received,
+        b"+OK\r\n".repeat(16),
+        "pipelined SETs returned unexpected bytes"
+    );
+
+    // Verify all 16 keys actually landed in the store by reading them
+    // back, also pipelined.
+    let mut get_batch = Vec::new();
+    for i in 0..16u32 {
+        get_batch.extend_from_slice(format!("*2\r\n$3\r\nGET\r\n$5\r\nkey{i:02}\r\n").as_bytes());
+    }
+    stream.write_all(&get_batch).await.unwrap();
+    stream.flush().await.unwrap();
+
+    // Each GET response is `$4\r\nvNNN\r\n` = 10 bytes; 16 of them = 160.
+    let mut get_received = Vec::with_capacity(160);
+    let get_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while get_received.len() < 160 {
+        let mut chunk = [0u8; 256];
+        let n = tokio::time::timeout_at(get_deadline, stream.read(&mut chunk))
+            .await
+            .expect("server stalled draining pipelined GET batch")
+            .expect("read failed");
+        assert!(n > 0, "server closed connection mid-batch on GETs");
+        get_received.extend_from_slice(&chunk[..n]);
+    }
+    let mut expected = Vec::new();
+    for i in 0..16u32 {
+        expected.extend_from_slice(format!("$4\r\nv{i:03}\r\n").as_bytes());
+    }
+    assert_eq!(get_received, expected, "pipelined GETs disagreed with values");
+
+    drop(stream);
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn test_server_command_pipelining() {
     let (server, addr) = create_and_start_test_server().await;
 
